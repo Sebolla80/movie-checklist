@@ -533,28 +533,65 @@ body{color:var(--text);font-family:'Inter',sans-serif;font-size:15px;display:fle
 </div>
 <div class="toast" id="toast"></div>
 
+
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import{getAuth,GoogleAuthProvider,signInWithPopup,signOut as fbSO,onAuthStateChanged}from"https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
 import{getFirestore,doc,getDoc,setDoc,deleteDoc,collection,getDocs}from"https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
 
 const FC={apiKey:"AIzaSyAswngzSg6KY8R-KaA-eB8FyVUJjiyegfw",authDomain:"movie-check-44bc1.firebaseapp.com",projectId:"movie-check-44bc1",storageBucket:"movie-check-44bc1.firebasestorage.app",messagingSenderId:"678806444530",appId:"1:678806444530:web:62163889af6afe5bbdb36b"};
-const fa=initializeApp(FC);const auth=getAuth(fa);const db=getFirestore(fa);const gp=new GoogleAuthProvider();
+const fa=initializeApp(FC);
+const auth=getAuth(fa);
+const db=getFirestore(fa);
+const gp=new GoogleAuthProvider();
 const TK='eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJiZjMzZTdiZWE5YjEzNjY1NTUzOGVlMTI2M2RhODhlNCIsIm5iZiI6MTc4MTM3MDg4NS45OSwic3ViIjoiNmEyZDkwMDUzOTU5ZjNlNmJlODk2ZGIwIiwic2NvcGVzIjpbImFwaV9yZWFkIl0sInZlcnNpb24iOjF9.cN30VPfpi0htn7Sq2LNuQrANCoJkghufO7vdrSWfmUE';
-const BASE='https://api.themoviedb.org/3';const H={'Authorization':'Bearer '+TK};
+const BASE='https://api.themoviedb.org/3';
+const H={'Authorization':'Bearer '+TK};
 
-let cu=null,movies=[],tvS=[],specs=[],prov={},seen={},notes={},wish={};
-let filt='all',srt='year_desc',pid=null,nmid=null,allLists=[],cTab='movies',sTmr=null;
-let sType='person',allWishItems=[],currentPersonIsFollowed=false,currentPersonData=null;
+// ── STATE ──
+// All IDs stored as strings to avoid number/string key mismatch
+let cu=null;
+let movies=[],tvS=[],specs=[],prov={};
+let seen={},notes={},wish={};   // keys: String(movieId)
+let filt='all',srt='year_desc',pid=null,nmid=null;
+let allLists=[],cTab='movies',sTmr=null,sType='person';
+let allWishItems=[],currentPersonIsFollowed=false,currentPersonData=null;
+let previewCache={};
 let standaloneData={seen:{},notes:{},wish:{}};
 
+// ── HELPERS ──
+function sid(id){return String(id);}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function showErr(m){const el=document.getElementById('errMsg');if(el)el.innerHTML=m?`<div class="err-bar">${esc(m)}</div>`:'';}
+function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500);}
+function pc(n){const l=(n||'').toLowerCase();if(l.includes('netflix'))return'pt-netflix';if(l.includes('disney'))return'pt-disney';if(l.includes('max')||l.includes('hbo'))return'pt-hbo';if(l.includes('prime')||l.includes('amazon'))return'pt-amazon';if(l.includes('apple'))return'pt-apple';if(l.includes('paramount'))return'pt-paramount';return'pt-default';}
+function parseProv(d){const ar=d?.results?.AR||d?.results?.US||{};const all=[...(ar.flatrate||[]),...(ar.free||[]),...(ar.ads||[])];const s=new Set();return all.filter(p=>{if(s.has(p.provider_id))return false;s.add(p.provider_id);return true;}).slice(0,4);}
+
+async function tmdb(p,lang='es-419'){
+  const url=BASE+p+(p.includes('?')?'&':'?')+'language='+lang;
+  const r=await fetch(url,{headers:H});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  return r.json();
+}
+
+// Strip undefined/null from object before saving to Firestore
+function cleanForFirestore(obj){
+  if(typeof obj!=='object'||obj===null||Array.isArray(obj))return obj;
+  const out={};
+  for(const k of Object.keys(obj)){
+    const v=obj[k];
+    if(v===undefined||v===null)continue;
+    out[k]=typeof v==='object'?cleanForFirestore(v):v;
+  }
+  return out;
+}
+
+// ── AUTH ──
 window.signIn=async()=>{try{await signInWithPopup(auth,gp);}catch(e){showErr('No se pudo iniciar sesión.');}};
 window.signOut=async()=>{await fbSO(auth);location.reload();};
-
 window.toggleUserMenu=(type)=>{
   const id=type==='desktop'?'userMenuDesktop':'userMenuMobile';
-  const el=document.getElementById(id);
-  el.classList.toggle('open');
+  document.getElementById(id)?.classList.toggle('open');
 };
 document.addEventListener('click',e=>{
   if(!e.target.closest('#sidebarUser'))document.getElementById('userMenuDesktop')?.classList.remove('open');
@@ -566,57 +603,63 @@ onAuthStateChanged(auth,u=>{
   cu=u;
   if(u){
     document.getElementById('auth-screen').style.display='none';
-    const as=document.getElementById('app-screen');as.style.display='flex';as.style.flexDirection='column';as.style.minHeight='100vh';
+    const as=document.getElementById('app-screen');
+    as.style.display='flex';as.style.flexDirection='column';as.style.minHeight='100vh';
     const av=u.photoURL||'';const nm=u.displayName||'';
-    document.getElementById('sideAv').src=av;
-    document.getElementById('mobAv').src=av;
-    document.getElementById('sideNm').textContent=nm.split(' ')[0];
-    document.getElementById('menuName').textContent=nm;
-    document.getElementById('menuNameMob').textContent=nm;
-    loadLists();loadWishlist();loadStandalone();
+    ['sideAv','mobAv'].forEach(id=>{const el=document.getElementById(id);if(el)el.src=av;});
+    const sn=document.getElementById('sideNm');if(sn)sn.textContent=nm.split(' ')[0];
+    const mn=document.getElementById('menuName');if(mn)mn.textContent=nm;
+    const mm=document.getElementById('menuNameMob');if(mm)mm.textContent=nm;
+    loadStandalone();
+    loadWishlist();
+    loadLists();
   }else{
     document.getElementById('auth-screen').style.display='flex';
     document.getElementById('app-screen').style.display='none';
   }
 });
 
-async function tmdb(p,lang='es-419'){
-  const r=await fetch(BASE+p+(p.includes('?')?'&':'?')+'language='+lang,{headers:H});
-  if(!r.ok)throw new Error('Error '+r.status);return r.json();
-}
-
 // ── VIEWS ──
 window.showView=v=>{
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));
-  document.getElementById('view-'+v).classList.add('active');
+  document.getElementById('view-'+v)?.classList.add('active');
   document.querySelectorAll('.snav-btn').forEach(b=>b.classList.remove('active'));
-  const sb=document.getElementById('snav-'+v);if(sb)sb.classList.add('active');
+  document.getElementById('snav-'+v)?.classList.add('active');
   document.querySelectorAll('.tbtab').forEach(b=>b.classList.remove('active'));
-  const tb=document.getElementById('tb-'+v);if(tb)tb.classList.add('active');
-  if(v==='lists')loadLists();
-  if(v==='wish'){loadWishlist();renderWish();}
-  if(v==='home')renderHome();
+  document.getElementById('tb-'+v)?.classList.add('active');
   document.querySelector('.main-content')?.scrollTo(0,0);
+  if(v==='lists')loadLists();
+  if(v==='wish'){loadWishlist().then(()=>renderWish());}
+  if(v==='home')renderHome();
 };
 
-// ── SEARCH TYPE ──
+// ── SEARCH ──
 window.setSType=(t,btn)=>{
   sType=t;
   document.querySelectorAll('.stt-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('si').placeholder=t==='movie'?'Buscá una película...':'Buscá un director o actor...';
+  const si=document.getElementById('si');
+  if(si)si.placeholder=t==='movie'?'Buscá una película...':'Buscá un director o actor...';
   hideSug();
 };
+function hideSug(){const s=document.getElementById('sug-box');if(s){s.style.display='none';s.innerHTML='';}}
 
-// ── SEARCH ──
-const si=document.getElementById('si');
-si.addEventListener('input',()=>{clearTimeout(sTmr);if(si.value.trim().length<3){hideSug();return;}sTmr=setTimeout(()=>doSearch(true),350);});
-si.addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(sTmr);doSearch(false);}if(e.key==='Escape')hideSug();});
-function hideSug(){const s=document.getElementById('sug-box');s.style.display='none';s.innerHTML='';}
+const siEl=document.getElementById('si');
+siEl.addEventListener('input',()=>{
+  clearTimeout(sTmr);
+  if(siEl.value.trim().length<3){hideSug();return;}
+  sTmr=setTimeout(()=>doSearch(),350);
+});
+siEl.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){clearTimeout(sTmr);doSearch();}
+  if(e.key==='Escape')hideSug();
+});
 
-window.doSearch=async(auto=false)=>{
-  const q=si.value.trim();if(!q)return;showErr('');
-  const sb=document.getElementById('sug-box');sb.style.display='block';
+window.doSearch=async()=>{
+  const q=siEl.value.trim();if(!q)return;
+  showErr('');
+  const sb=document.getElementById('sug-box');
+  sb.style.display='block';
   sb.innerHTML='<div class="loading-m" style="padding:8px 14px;font-size:12px;">Buscando...</div>';
   try{
     if(sType==='movie'){
@@ -626,7 +669,7 @@ window.doSearch=async(auto=false)=>{
       sb.innerHTML=res.map(m=>{
         const yr=m.release_date?m.release_date.substring(0,4):'';
         const showOrig=m.original_title&&m.original_title!==m.title;
-        return`<div class="sug-item" onclick="showMovieDetail(${m.id})">
+        return`<div class="sug-item" data-movie-id="${m.id}" onclick="showMovieDetail(this.dataset.movieId)">
           ${m.poster_path?`<img class="sug-poster" src="https://image.tmdb.org/t/p/w92${m.poster_path}"/>`:`<div class="sug-poster" style="display:flex;align-items:center;justify-content:center;font-size:14px;background:var(--surface2);">🎬</div>`}
           <div style="flex:1;min-width:0;">
             <div class="sug-name">${esc(m.title||'')}</div>
@@ -642,7 +685,7 @@ window.doSearch=async(auto=false)=>{
       sb.innerHTML=res.map(p=>{
         const dept=p.known_for_department==='Directing'?'Director/a':p.known_for_department==='Acting'?'Actor/Actriz':(p.known_for_department||'');
         const kf=(p.known_for||[]).slice(0,2).map(m=>m.title||m.name).join(', ');
-        return`<div class="sug-item" onclick="loadPerson(${p.id},'${esc(p.name)}','${esc(p.profile_path||'')}','${esc(dept)}',false)">
+        return`<div class="sug-item" data-person-id="${p.id}" data-person-name="${esc(p.name)}" data-person-photo="${esc(p.profile_path||'')}" data-person-dept="${esc(dept)}" onclick="loadPersonFromEl(this)">
           ${p.profile_path?`<img class="sug-av" src="https://image.tmdb.org/t/p/w45${p.profile_path}"/>`:`<div class="sug-av" style="display:flex;align-items:center;justify-content:center;font-size:15px;background:var(--surface2);">👤</div>`}
           <div style="flex:1;min-width:0;"><div class="sug-name">${esc(p.name)}</div><div class="sug-sub">${esc(kf)}</div></div>
           <span class="sug-type">${dept}</span>
@@ -652,9 +695,14 @@ window.doSearch=async(auto=false)=>{
   }catch(e){showErr('Error al buscar.');hideSug();}
 };
 
-// ── MOVIE DETAIL ──
+window.loadPersonFromEl=(el)=>{
+  const{personId,personName,personPhoto,personDept}=el.dataset;
+  loadPerson(personId,personName,personPhoto,personDept,false);
+};
+
+// ── MOVIE DETAIL (search by movie) ──
 window.showMovieDetail=async(id)=>{
-  hideSug();si.value='';
+  hideSug();siEl.value='';
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));
   document.getElementById('view-movie').classList.add('active');
   document.getElementById('movie-detail').innerHTML='<div class="loading-m">Cargando...</div>';
@@ -666,16 +714,15 @@ window.showMovieDetail=async(id)=>{
       fetch(BASE+'/movie/'+id+'/watch/providers',{headers:H}).then(r=>r.json())
     ]);
     const director=(cred.crew||[]).find(c=>c.job==='Director');
-    const provData=parseProv(wprov);
-    const provHtml=provData.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
+    const provHtml=parseProv(wprov).map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
     const titleES=mES.title||mEN.title||'';
     const titleOrig=mEN.original_title||'';
     const showOrig=titleOrig&&titleOrig.toLowerCase()!==titleES.toLowerCase();
     const yr=mES.release_date?mES.release_date.substring(0,4):'';
     const rt=mES.vote_average?mES.vote_average.toFixed(1):'';
-    const isSeen=!!standaloneData.seen[id];
-    const isWished=!!standaloneData.wish[id];
-    const hasNote=!!standaloneData.notes[id];
+    const isSeen=!!standaloneData.seen[sid(id)];
+    const isWished=!!standaloneData.wish[sid(id)];
+    const hasNote=!!standaloneData.notes[sid(id)];
     document.getElementById('movie-detail').innerHTML=`
       <div class="movie-detail-card">
         ${mES.poster_path?`<img class="mdc-poster" src="https://image.tmdb.org/t/p/w300${mES.poster_path}"/>`:`<div class="mdc-ph">🎬</div>`}
@@ -688,80 +735,100 @@ window.showMovieDetail=async(id)=>{
             ${rt?`<span class="mdc-rating">★ ${rt}</span>`:''}
           </div>
           ${mES.overview?`<div class="mdc-overview">${esc(mES.overview)}</div>`:''}
-          ${director?`<div class="mdc-director">Dir: <a onclick="loadPerson(${director.id},'${esc(director.name)}','${esc(director.profile_path||'')}','Director/a',false)">${esc(director.name)}</a></div>`:''}
+          ${director?`<div class="mdc-director">Dir: <a onclick="loadPerson('${director.id}','${esc(director.name)}','${esc(director.profile_path||'')}','Director/a',false)">${esc(director.name)}</a></div>`:''}
           ${provHtml?`<div class="mdc-plats">${provHtml}</div>`:''}
           <div class="mdc-actions">
-            <button class="mdc-btn ${isSeen?'seen-btn':''}" onclick="toggleStandaloneSeen(${id},'${esc(titleES)}','${esc(mES.poster_path||'')}','${esc(mES.release_date||'')}',${mES.vote_average||0})">
+            <button class="mdc-btn ${isSeen?'seen-btn':''}" data-id="${id}" data-title="${esc(titleES)}" data-poster="${esc(mES.poster_path||'')}" data-date="${esc(mES.release_date||'')}" data-rating="${mES.vote_average||0}" onclick="toggleStandaloneSeen(this)">
               ✓ ${isSeen?'Vista':'Marcar como vista'}
             </button>
-            <button class="mdc-btn ${isWished?'wish-btn':''}" onclick="toggleStandaloneWish(${id},'${esc(titleES)}','${esc(mES.poster_path||'')}','${esc(mES.release_date||'')}',${mES.vote_average||0})">
+            <button class="mdc-btn ${isWished?'wish-btn':''}" data-id="${id}" data-title="${esc(titleES)}" data-poster="${esc(mES.poster_path||'')}" data-date="${esc(mES.release_date||'')}" data-rating="${mES.vote_average||0}" onclick="toggleStandaloneWish(this)">
               ★ ${isWished?'En wishlist':'Agregar a wishlist'}
             </button>
-            ${director?`<button class="mdc-btn dir-btn" onclick="loadPerson(${director.id},'${esc(director.name)}','${esc(director.profile_path||'')}','Director/a',false)">🎬 Ver filmografía de ${esc(director.name)}</button>`:''}
-            <button class="mdc-btn note-btn" onclick="oModal('standalone_${id}','${esc(titleES)}')">✏ ${hasNote?'Editar nota':'Agregar nota'}</button>
+            ${director?`<button class="mdc-btn dir-btn" onclick="loadPerson('${director.id}','${esc(director.name)}','${esc(director.profile_path||'')}','Director/a',false)">🎬 Ver filmografía de ${esc(director.name)}</button>`:''}
+            <button class="mdc-btn note-btn" data-id="${id}" data-title="${esc(titleES)}" onclick="toggleStandaloneNote(this)">✏ ${hasNote?'Editar nota':'Agregar nota'}</button>
           </div>
         </div>
       </div>`;
   }catch(e){document.getElementById('movie-detail').innerHTML=`<div class="err-bar">Error al cargar la película.</div>`;}
 };
-
 window.closeMovie=()=>{
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));
   document.getElementById('view-home').classList.add('active');
   document.getElementById('snav-home')?.classList.add('active');
 };
 
+// ── STANDALONE (search by movie) ──
 async function loadStandalone(){
   if(!cu)return;
-  try{const s=await getDoc(doc(db,'users',cu.uid,'standalone','movies'));
-    if(s.exists()){const d=s.data();standaloneData.seen=d.seen||{};standaloneData.notes=d.notes||{};standaloneData.wish=d.wish||{};}
+  try{
+    const s=await getDoc(doc(db,'users',cu.uid,'standalone','movies'));
+    if(s.exists()){
+      const d=s.data();
+      standaloneData.seen={};Object.keys(d.seen||{}).forEach(k=>{standaloneData.seen[sid(k)]=true;});
+      standaloneData.notes={};Object.keys(d.notes||{}).forEach(k=>{standaloneData.notes[sid(k)]=d.notes[k];});
+      standaloneData.wish={};Object.keys(d.wish||{}).forEach(k=>{if(d.wish[k])standaloneData.wish[sid(k)]=d.wish[k];});
+    }
   }catch(e){}
 }
-async function saveStandalone(){if(!cu)return;try{await setDoc(doc(db,'users',cu.uid,'standalone','movies'),standaloneData,{merge:true});}catch(e){}}
-
-window.toggleStandaloneSeen=async(id,title,poster,date,rating)=>{
-  if(standaloneData.seen[id]){delete standaloneData.seen[id];}else{standaloneData.seen[id]=true;if(standaloneData.wish[id])delete standaloneData.wish[id];}
-  await saveStandalone();await loadWishlist();showMovieDetail(id);showToast(standaloneData.seen[id]?'Marcada como vista ✓':'Desmarcada');
+async function saveStandalone(){
+  if(!cu)return;
+  try{await setDoc(doc(db,'users',cu.uid,'standalone','movies'),cleanForFirestore(standaloneData),{merge:true});}
+  catch(e){showErr('No se pudo guardar.');}
+}
+window.toggleStandaloneSeen=async(btn)=>{
+  const id=sid(btn.dataset.id);
+  if(standaloneData.seen[id]){delete standaloneData.seen[id];}
+  else{standaloneData.seen[id]=true;delete standaloneData.wish[id];}
+  await saveStandalone();await loadWishlist();showMovieDetail(id);
+  showToast(standaloneData.seen[id]?'Marcada como vista ✓':'Desmarcada');
 };
-window.toggleStandaloneWish=async(id,title,poster,date,rating)=>{
-  if(standaloneData.wish[id]){delete standaloneData.wish[id];}
-  else{standaloneData.wish[id]={id,title,poster_path:poster,release_date:date,vote_average:rating,_listName:'Búsqueda directa',addedAt:Date.now()};}
-  await saveStandalone();await loadWishlist();showMovieDetail(id);showToast(standaloneData.wish[id]?'Agregada a wishlist ★':'Quitada');
+window.toggleStandaloneWish=async(btn)=>{
+  const id=sid(btn.dataset.id);
+  const wasWished=!!standaloneData.wish[id];
+  if(wasWished){delete standaloneData.wish[id];}
+  else{standaloneData.wish[id]={id,title:btn.dataset.title||'',poster_path:btn.dataset.poster||'',release_date:btn.dataset.date||'',vote_average:parseFloat(btn.dataset.rating)||0,_listName:'Búsqueda directa',addedAt:Date.now()};}
+  await saveStandalone();await loadWishlist();showMovieDetail(id);
+  showToast(!wasWished?'Agregada a wishlist ★':'Quitada de wishlist');
+};
+window.toggleStandaloneNote=async(btn)=>{
+  oModal('standalone_'+btn.dataset.id, btn.dataset.title||'');
 };
 
 // ── PERSON ──
 window.loadPerson=async(id,name,photo,dept,fromList=false)=>{
-  hideSug();si.value='';
+  hideSug();siEl.value='';
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));
   document.getElementById('view-person').classList.add('active');
   document.getElementById('mlist').innerHTML='<div class="loading-m">Cargando filmografía...</div>';
-  pid=String(id);showErr('');cTab='movies';filt='all';
+  pid=sid(id);showErr('');cTab='movies';filt='all';
   document.querySelectorAll('.ctab').forEach(t=>t.classList.remove('active'));
-  document.querySelector('.ctab').classList.add('active');
+  document.querySelector('.ctab')?.classList.add('active');
   document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));
-  document.querySelector('.fb').classList.add('active');
-  currentPersonData={id,name,photo,dept};
+  document.querySelector('.fb')?.classList.add('active');
+  currentPersonData={id:pid,name,photo,dept};
+
   let isFollowed=false;
-  try{const s=await getDoc(doc(db,'users',cu.uid,'lists',String(id)));isFollowed=s.exists()&&!!s.data().name;}catch(e){}
+  try{const s=await getDoc(doc(db,'users',cu.uid,'lists',pid));isFollowed=s.exists()&&!!s.data().name;}catch(e){}
   currentPersonIsFollowed=isFollowed;
+
   try{
-    await loadUD(id);
+    await loadUD(pid);
     const[crA,tvA,crO,tvO]=await Promise.all([
       tmdb('/person/'+id+'/movie_credits','es-419'),
       tmdb('/person/'+id+'/tv_credits','es-419'),
       tmdb('/person/'+id+'/movie_credits','en-US'),
       tmdb('/person/'+id+'/tv_credits','en-US')
     ]);
-    const oMM={};[...(crO.cast||[]),...(crO.crew||[])].forEach(m=>{if(m.id)oMM[m.id]=m.original_title||m.title||'';});
-    const oTM={};[...(tvO.cast||[]),...(tvO.crew||[])].forEach(m=>{if(m.id)oTM[m.id]=m.original_name||m.name||'';});
+    const oMM={};[...(crO.cast||[]),...(crO.crew||[])].forEach(m=>{if(m.id)oMM[sid(m.id)]=m.original_title||m.title||'';});
+    const oTM={};[...(tvO.cast||[]),...(tvO.crew||[])].forEach(m=>{if(m.id)oTM[sid(m.id)]=m.original_name||m.name||'';});
     const isD=dept==='Director/a';
     const rawM=isD?(crA.crew||[]).filter(m=>m.job==='Director'):(crA.cast||[]);
     const rawT=isD?(tvA.crew||[]).filter(m=>m.job==='Director'):(tvA.cast||[]);
     const ms=new Set();movies=[];
-    for(const m of rawM){if(!ms.has(m.id)&&m.title){ms.add(m.id);m._orig=oMM[m.id]||'';movies.push(m);}}
+    for(const m of rawM){if(!ms.has(m.id)&&m.title){ms.add(m.id);m._orig=oMM[sid(m.id)]||'';movies.push(m);}}
     movies.sort((a,b)=>(b.release_date||'').localeCompare(a.release_date||''));
     const ts=new Set();tvS=[];specs=[];
-    for(const m of rawT){if(!ts.has(m.id)&&m.name){ts.add(m.id);m._orig=oTM[m.id]||'';m._title=m.name;m._date=m.first_air_date||'';m._poster=m.poster_path||'';if((m.episode_count||99)<=2)specs.push(m);else tvS.push(m);}}
+    for(const m of rawT){if(!ts.has(m.id)&&m.name){ts.add(m.id);m._orig=oTM[sid(m.id)]||'';m._title=m.name;m._date=m.first_air_date||'';m._poster=m.poster_path||'';if((m.episode_count||99)<=2)specs.push(m);else tvS.push(m);}}
     tvS.sort((a,b)=>(b._date||'').localeCompare(a._date||''));
     specs.sort((a,b)=>(b._date||'').localeCompare(a._date||''));
     document.getElementById('cnt-m').textContent=movies.length;
@@ -770,7 +837,7 @@ window.loadPerson=async(id,name,photo,dept,fromList=false)=>{
     renderPersonBanner(name,photo,dept);
     await loadProv([...movies,...tvS,...specs].slice(0,60));
     renderMovies();
-    if(isFollowed)await saveMeta(id,name,photo,dept,movies.length);
+    if(isFollowed)await saveMeta(pid,name,photo,dept,movies.length);
   }catch(e){showErr('Error al cargar. '+e.message);}
 };
 
@@ -793,175 +860,53 @@ function renderPersonBanner(name,photo,dept){
       <div class="person-actions">${followBtn}</div>
     </div>`;
 }
-
 window.followPerson=async()=>{
   if(!cu||!currentPersonData)return;
-  const{id,name,photo,dept}=currentPersonData;
   currentPersonIsFollowed=true;
+  const{id,name,photo,dept}=currentPersonData;
   await saveMeta(id,name,photo,dept,movies.length);
   renderPersonBanner(name,photo,dept);showToast('Agregado a tus listas ✓');loadLists();
 };
 window.unfollowPerson=async()=>{
   if(!cu||!currentPersonData)return;
   if(!confirm('¿Dejás de seguir a '+currentPersonData.name+'? Perdés tu progreso.'))return;
-  await deleteDoc(doc(db,'users',cu.uid,'lists',String(currentPersonData.id)));
+  await deleteDoc(doc(db,'users',cu.uid,'lists',currentPersonData.id));
   currentPersonIsFollowed=false;seen={};notes={};wish={};
   renderPersonBanner(currentPersonData.name,currentPersonData.photo,currentPersonData.dept);
   renderMovies();showToast('Dejaste de seguir');loadLists();
 };
-
-function closePerson(){
+window.closePerson=()=>{
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));
   document.getElementById('view-home').classList.add('active');
   document.getElementById('snav-home')?.classList.add('active');
   document.getElementById('tb-home')?.classList.add('active');
-  pid=null;movies=[];tvS=[];specs=[];seen={};notes={};wish={};prov={};currentPersonData=null;
+  pid=null;movies=[];tvS=[];specs=[];seen={};notes={};wish={};prov={};currentPersonData=null;previewCache={};
   renderHome();
-}
-window.closePerson=closePerson;
+};
 
 // ── USER DATA ──
-async function loadUD(id){
+async function loadUD(personId){
   if(!cu)return;
-  try{const s=await getDoc(doc(db,'users',cu.uid,'lists',String(id)));
+  seen={};notes={};wish={};
+  try{
+    const s=await getDoc(doc(db,'users',cu.uid,'lists',String(personId)));
     if(s.exists()){
       const d=s.data();
-      // Normalize all keys to strings to avoid numeric vs string mismatch
-      seen={};Object.keys(d.seen||{}).forEach(k=>{seen[String(k)]=d.seen[k];});
-      notes={};Object.keys(d.notes||{}).forEach(k=>{notes[String(k)]=d.notes[k];});
-      wish={};Object.keys(d.wish||{}).forEach(k=>{wish[String(k)]=d.wish[k];});
-    }else{seen={};notes={};wish={};}
-  }catch(e){seen={};notes={};wish={};}
+      Object.keys(d.seen||{}).forEach(k=>{seen[sid(k)]=true;});
+      Object.keys(d.notes||{}).forEach(k=>{notes[sid(k)]=d.notes[k];});
+      Object.keys(d.wish||{}).forEach(k=>{if(d.wish[k]&&typeof d.wish[k]==='object')wish[sid(k)]=d.wish[k];});
+    }
+  }catch(e){}
 }
 async function saveUD(){
   if(!cu||!pid||!currentPersonIsFollowed)return;
   try{
-    // Clean objects — Firestore rejects undefined values
-    const cleanObj=obj=>{
-      const out={};
-      Object.keys(obj).forEach(k=>{
-        const v=obj[k];
-        if(v===undefined||v===null)return;
-        if(typeof v==='object'&&!Array.isArray(v)){
-          const cleaned=cleanObj(v);
-          if(Object.keys(cleaned).length>0)out[k]=cleaned;
-        }else{
-          out[k]=v;
-        }
-      });
-      return out;
-    };
-    await setDoc(doc(db,'users',cu.uid,'lists',pid),{
-      seen:cleanObj(seen),
-      notes:cleanObj(notes),
-      wish:cleanObj(wish)
-    },{merge:true});
-  }catch(e){showErr('No se pudo guardar: '+e.message);}
+    await setDoc(doc(db,'users',cu.uid,'lists',pid),cleanForFirestore({seen,notes,wish}),{merge:true});
+  }catch(e){showErr('Error al guardar: '+e.message);}
 }
 async function saveMeta(id,name,photo,dept,total){
   if(!cu)return;
-  try{await setDoc(doc(db,'users',cu.uid,'lists',String(id)),{personId:id,name,photo,dept,total,updatedAt:Date.now()},{merge:true});}catch(e){}
-}
-
-// ── WISHLIST ──
-async function loadWishlist(){
-  if(!cu)return;
-  try{
-    const s=await getDocs(collection(db,'users',cu.uid,'lists'));
-    allWishItems=[];
-    s.forEach(d=>{
-      const data=d.data();
-      Object.keys(data.wish||{}).forEach(mid=>{
-        const item=data.wish[mid];
-        if(item&&item.title)allWishItems.push({...item,_listName:data.name,_listId:d.id});
-      });
-    });
-    Object.keys(standaloneData.wish||{}).forEach(mid=>{
-      const item=standaloneData.wish[mid];
-      if(item&&item.title)allWishItems.push({...item,_listId:'standalone'});
-    });
-    allWishItems.sort((a,b)=>(b.addedAt||0)-(a.addedAt||0));
-    document.getElementById('wish-count').textContent=allWishItems.length+' títulos';
-  }catch(e){}
-}
-function renderWish(q=''){
-  const list=q?allWishItems.filter(i=>(i.title||'').toLowerCase().includes(q.toLowerCase())):allWishItems;
-  const el=document.getElementById('wish-list');
-  if(!list.length){el.innerHTML='<div class="empty-st"><span class="empty-ic">★</span>Tu wishlist está vacía.<br>Marcá películas con ★ en cualquier filmografía.</div>';return;}
-  el.innerHTML=list.map(m=>{
-    const yr=m.release_date?m.release_date.substring(0,4):'';
-    const rt=m.vote_average?'★ '+parseFloat(m.vote_average).toFixed(1):'';
-    const escT=esc(m.title||'');const escP=esc(m.poster_path||'');const escD=esc(m.release_date||'');
-    return`<div class="mc wished">
-      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreviewStandalone(${m.id},'${escT}','${escP}','${escD}',${m.vote_average||0})">
-        ${m.poster_path?`<img class="mp" src="https://image.tmdb.org/t/p/w92${m.poster_path}" loading="lazy"/>`:`<div class="mp-ph">🎬</div>`}
-        <div class="mb">
-          <div class="mt">${escT}</div>
-          <div class="mm">${yr?`<span class="my">${yr}</span>`:''}${rt?`<span class="mr">${rt}</span>`:''}</div>
-          ${m._listName?`<div style="font-size:11px;color:var(--text3);margin-top:4px;">de ${esc(m._listName)}</div>`:''}
-        </div>
-      </div>
-      <div class="macts" style="padding-top:14px;">
-        <button class="act-btn star on" onclick="removeWish('${m._listId}',${m.id})" title="Quitar de wishlist">★</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-window.filterWish=q=>renderWish(q);
-window.removeWish=async(listId,movieId)=>{
-  if(!cu)return;
-  const mid=String(movieId); // keys in Firestore objects are always strings
-  try{
-    if(listId==='standalone'){
-      delete standaloneData.wish[mid];
-      delete standaloneData.wish[movieId];
-      await saveStandalone();
-    }else{
-      const ref=doc(db,'users',cu.uid,'lists',String(listId));
-      const s=await getDoc(ref);
-      if(s.exists()){
-        const d=s.data();
-        const w={...d.wish||{}};
-        delete w[mid];
-        delete w[movieId]; // belt and suspenders
-        await setDoc(ref,{wish:w},{merge:true});
-      }
-      if(pid===String(listId)){
-        delete wish[mid];
-        delete wish[movieId];
-        renderMovies();
-      }
-    }
-    await loadWishlist();
-    renderWish(document.getElementById('wish-fi')?.value||'');
-    showToast('Quitado de wishlist');
-  }catch(e){showErr('Error al actualizar wishlist.');}
-};
-
-// ── HOME ──
-async function renderHome(){
-  if(!cu)return;
-  try{
-    const s=await getDocs(collection(db,'users',cu.uid,'lists'));
-    const lists=[];s.forEach(d=>{if(d.data().name)lists.push(d.data());});
-    lists.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
-    const rp=document.getElementById('recentPersons');
-    if(!lists.length){rp.innerHTML='<div class="home-empty">Buscá un director o actor y seguilo para verlo acá</div>';}
-    else{rp.innerHTML=lists.slice(0,12).map(l=>`
-      <div class="person-card" onclick="loadPerson(${l.personId},'${esc(l.name)}','${esc(l.photo||'')}','${esc(l.dept||'')}',true)">
-        ${l.photo?`<img src="https://image.tmdb.org/t/p/w92${l.photo}"/>`:`<div class="person-ph">👤</div>`}
-        <div class="person-card-name">${esc(l.name)}</div>
-      </div>`).join('');}
-    const hw=document.getElementById('homeWish');
-    const wishItems=allWishItems.slice(0,12);
-    if(!wishItems.length){hw.innerHTML='<div class="home-empty">Agregá películas a tu wishlist con ★</div>';}
-    else{hw.innerHTML=wishItems.map(m=>`
-      <div class="poster-card">
-        ${m.poster_path?`<img src="https://image.tmdb.org/t/p/w154${m.poster_path}" loading="lazy"/>`:`<div class="poster-ph">🎬</div>`}
-        <div class="poster-overlay"><div class="poster-title">${esc(m.title||'')}</div>${m.release_date?`<div class="poster-year">${m.release_date.substring(0,4)}</div>`:''}</div>
-        <div class="poster-wish-badge">★</div>
-      </div>`).join('');}
-  }catch(e){}
+  try{await setDoc(doc(db,'users',cu.uid,'lists',String(id)),{personId:id,name,photo:photo||'',dept:dept||'',total:total||0,updatedAt:Date.now()},{merge:true});}catch(e){}
 }
 
 // ── PROVIDERS ──
@@ -973,20 +918,14 @@ async function loadProv(ms){
     return fetch(BASE+ep,{headers:H}).then(r=>r.json()).then(d=>{prov[m.id]=parseProv(d);}).catch(()=>{});
   }));
 }
-function parseProv(d){
-  const ar=d?.results?.AR||d?.results?.US||{};
-  const all=[...(ar.flatrate||[]),...(ar.free||[]),...(ar.ads||[])];
-  const s=new Set();return all.filter(p=>{if(s.has(p.provider_id))return false;s.add(p.provider_id);return true;}).slice(0,4);
-}
-function pc(n){const l=n.toLowerCase();if(l.includes('netflix'))return'pt-netflix';if(l.includes('disney'))return'pt-disney';if(l.includes('max')||l.includes('hbo'))return'pt-hbo';if(l.includes('prime')||l.includes('amazon'))return'pt-amazon';if(l.includes('apple'))return'pt-apple';if(l.includes('paramount'))return'pt-paramount';return'pt-default';}
 
 // ── RENDER MOVIES ──
 function getCurList(){if(cTab==='tv')return tvS;if(cTab==='special')return specs;return movies;}
 function renderMovies(){
   let list=[...getCurList()];const isTV=cTab!=='movies';
-  if(filt==='seen')list=list.filter(m=>seen[m.id]);
-  if(filt==='unseen')list=list.filter(m=>!seen[m.id]&&!wish[m.id]);
-  if(filt==='wish')list=list.filter(m=>wish[m.id]);
+  if(filt==='seen')list=list.filter(m=>seen[sid(m.id)]);
+  if(filt==='unseen')list=list.filter(m=>!seen[sid(m.id)]&&!wish[sid(m.id)]);
+  if(filt==='wish')list=list.filter(m=>wish[sid(m.id)]);
   if(filt==='streaming')list=list.filter(m=>prov[m.id]?.length);
   const dk=isTV?'_date':'release_date';const tk=isTV?'_title':'title';
   if(srt==='year_desc')list.sort((a,b)=>(b[dk]||'').localeCompare(a[dk]||''));
@@ -994,7 +933,8 @@ function renderMovies(){
   if(srt==='rating_desc')list.sort((a,b)=>(b.vote_average||0)-(a.vote_average||0));
   if(srt==='title_asc')list.sort((a,b)=>(a[tk]||'').localeCompare(b[tk]||''));
   const allC=[...movies,...tvS,...specs];
-  const sc=allC.filter(m=>seen[m.id]).length;const wc=allC.filter(m=>wish[m.id]).length;
+  const sc=allC.filter(m=>seen[sid(m.id)]).length;
+  const wc=allC.filter(m=>wish[sid(m.id)]).length;
   const ch=document.getElementById('seenChip');if(ch)ch.textContent=sc+' vistos';
   const wh=document.getElementById('wishChip');if(wh)wh.textContent=wc+' ★';
   if(!list.length){document.getElementById('mlist').innerHTML='<div class="empty-st"><span class="empty-ic">🔍</span>No hay títulos con ese filtro.</div>';return;}
@@ -1005,12 +945,19 @@ function renderMovies(){
     const dateStr=isTV?(m._date||''):(m.release_date||'');
     const yr=dateStr?dateStr.substring(0,4):'—';
     const rt=m.vote_average?'★ '+m.vote_average.toFixed(1):'';
-    const sid=String(m.id);
-    const sv=!!seen[sid];const wished=!!wish[sid];const nt=notes[sid]||'';
+    const id=sid(m.id);
+    const sv=!!seen[id];const wished=!!wish[id];const nt=notes[id]||'';
     const pl=prov[m.id]||[];
     const ph=pl.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
-    return`<div class="mc ${sv?'seen':wished?'wished':''}" data-id="${sid}" data-title="${esc(title)}" data-poster="${esc(poster)}" data-date="${esc(dateStr)}" data-rating="${m.vote_average||0}" data-istv="${isTV}" data-orig="${esc(orig)}">
-      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreviewFromCard(this.closest('.mc'))">
+    return`<div class="mc ${sv?'seen':wished?'wished':''}"
+        data-id="${id}"
+        data-title="${esc(title)}"
+        data-orig="${esc(orig)}"
+        data-poster="${esc(poster)}"
+        data-date="${esc(dateStr)}"
+        data-rating="${m.vote_average||0}"
+        data-istv="${isTV}">
+      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreviewFromCard(this.closest('[data-id]'))">
         ${poster?`<img class="mp" src="https://image.tmdb.org/t/p/w92${poster}" loading="lazy" alt="${esc(title)}"/>`:`<div class="mp-ph">${isTV?'📺':'🎬'}</div>`}
         <div class="mb">
           <div class="mt">${esc(title)}</div>
@@ -1021,29 +968,30 @@ function renderMovies(){
         </div>
       </div>
       <div class="macts">
-        <button class="act-btn check ${sv?'on':''}" onclick="tSeenFromCard(this.closest('.mc'))" title="${sv?'Desmarcar':'Marcar como visto'}">✓</button>
-        <button class="act-btn star ${wished?'on':''}" onclick="tWishFromCard(this.closest('.mc'))" title="${wished?'Quitar de wishlist':'Agregar a wishlist'}">★</button>
-        <button class="act-btn pen ${nt?'on':''}" onclick="tNoteFromCard(this.closest('.mc'))" title="Nota">✏</button>
+        <button class="act-btn check ${sv?'on':''}" onclick="actSeen(this.closest('[data-id]'))" title="${sv?'Desmarcar':'Marcar como visto'}">✓</button>
+        <button class="act-btn star ${wished?'on':''}" onclick="actWish(this.closest('[data-id]'))" title="${wished?'Quitar de wishlist':'Agregar a wishlist'}">★</button>
+        <button class="act-btn pen ${nt?'on':''}" onclick="actNote(this.closest('[data-id]'))" title="Nota">✏</button>
       </div>
     </div>`;
   }).join('');
 }
 
-// Helper functions that read from data attributes — avoids quote escaping bugs
-window.tSeenFromCard=async(card)=>{
-  const sid=card.dataset.id;
-  if(seen[sid]){delete seen[sid];}else{seen[sid]=true;if(wish[sid])delete wish[sid];}
-  renderMovies();if(currentPersonIsFollowed)await saveUD();
-  showToast(seen[sid]?'Marcado como visto ✓':'Desmarcado');
+// Card actions — read data from attributes, no inline param escaping needed
+window.actSeen=async(card)=>{
+  const id=sid(card.dataset.id);
+  if(seen[id]){delete seen[id];}else{seen[id]=true;delete wish[id];}
+  renderMovies();
+  if(currentPersonIsFollowed)await saveUD();
+  showToast(seen[id]?'Marcado como visto ✓':'Desmarcado');
 };
-window.tWishFromCard=async(card)=>{
-  const sid=card.dataset.id;
-  const wasWished=!!wish[sid];
+window.actWish=async(card)=>{
+  const id=sid(card.dataset.id);
+  const wasWished=!!wish[id];
   if(wasWished){
-    delete wish[sid];
+    delete wish[id];
   }else{
-    wish[sid]={
-      id:sid,
+    wish[id]={
+      id,
       title:card.dataset.title||'',
       poster_path:card.dataset.poster||'',
       release_date:card.dataset.date||'',
@@ -1052,53 +1000,165 @@ window.tWishFromCard=async(card)=>{
     };
   }
   renderMovies();
-  if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
+  if(currentPersonIsFollowed){
+    await saveUD();
+    await loadWishlist();
+  }
   showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
 };
-window.tNoteFromCard=(card)=>{
-  oModal(card.dataset.id, card.dataset.title);
-};
+window.actNote=(card)=>{oModal(card.dataset.id, card.dataset.title||'');};
 window.openPreviewFromCard=(card)=>{
-  const{id,title,poster,date,rating,istv,orig}=card.dataset;
+  const{id,title,poster,orig,date,rating,istv}=card.dataset;
   const yr=date?date.substring(0,4):'—';
   const rt=rating&&rating!=='0'?'★ '+parseFloat(rating).toFixed(1):'';
-  openPreview(id,title,poster,orig||'',yr,rt,date,istv==='true');
+  openPreview(id,title||'',poster||'',orig||'',yr,rt,date||'',istv==='true');
 };
-
-window.tSeen=async id=>{ // kept for backward compat
-  const sid=String(id);
-  if(seen[sid]){delete seen[sid];}else{seen[sid]=true;if(wish[sid])delete wish[sid];}
-  renderMovies();if(currentPersonIsFollowed)await saveUD();
-  showToast(seen[sid]?'Marcado como visto ✓':'Desmarcado');
-};
-window.tWish=async(id,title,poster,date,rating)=>{ // kept for backward compat
-  const sid=String(id);
-  const wasWished=!!wish[sid];
-  if(wasWished){delete wish[sid];}
-  else{wish[sid]={id:sid,title:title||'',poster_path:poster||'',release_date:date||'',vote_average:parseFloat(rating)||0,addedAt:Date.now()};}
-  renderMovies();
-  if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
-  showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
-};
-window.setCTab=(tab,btn)=>{cTab=tab;filt='all';document.querySelectorAll('.ctab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));document.querySelector('.fb').classList.add('active');renderMovies();};
+window.setCTab=(tab,btn)=>{cTab=tab;filt='all';document.querySelectorAll('.ctab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));document.querySelector('.fb')?.classList.add('active');renderMovies();};
 window.setFilt=(f,btn)=>{filt=f;document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderMovies();};
 window.setSort=v=>{srt=v;renderMovies();};
+
+// ── WISHLIST ──
+async function loadWishlist(){
+  if(!cu)return;
+  allWishItems=[];
+  try{
+    const s=await getDocs(collection(db,'users',cu.uid,'lists'));
+    s.forEach(d=>{
+      const data=d.data();
+      Object.keys(data.wish||{}).forEach(k=>{
+        const item=data.wish[k];
+        if(item&&item.title)allWishItems.push({...item,id:sid(k),_listId:d.id,_listName:data.name||''});
+      });
+    });
+    Object.keys(standaloneData.wish||{}).forEach(k=>{
+      const item=standaloneData.wish[k];
+      if(item&&item.title)allWishItems.push({...item,id:sid(k),_listId:'standalone',_listName:'Búsqueda directa'});
+    });
+    allWishItems.sort((a,b)=>(b.addedAt||0)-(a.addedAt||0));
+    const wc=document.getElementById('wish-count');if(wc)wc.textContent=allWishItems.length+' títulos';
+  }catch(e){}
+}
+
+function renderWish(q=''){
+  const list=q?allWishItems.filter(i=>(i.title||'').toLowerCase().includes(q.toLowerCase())):allWishItems;
+  const el=document.getElementById('wish-list');
+  if(!el)return;
+  if(!list.length){el.innerHTML='<div class="empty-st"><span class="empty-ic">★</span>Tu wishlist está vacía.<br>Marcá películas con ★ en cualquier filmografía.</div>';return;}
+  el.innerHTML=list.map(m=>{
+    const yr=m.release_date?m.release_date.substring(0,4):'';
+    const rt=m.vote_average?'★ '+parseFloat(m.vote_average).toFixed(1):'';
+    const id=sid(m.id);
+    return`<div class="mc wished"
+        data-id="${id}"
+        data-list-id="${esc(m._listId||'')}"
+        data-title="${esc(m.title||'')}"
+        data-poster="${esc(m.poster_path||'')}"
+        data-date="${esc(m.release_date||'')}"
+        data-rating="${m.vote_average||0}">
+      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreviewWish(this.closest('[data-id]'))">
+        ${m.poster_path?`<img class="mp" src="https://image.tmdb.org/t/p/w92${m.poster_path}" loading="lazy"/>`:`<div class="mp-ph">🎬</div>`}
+        <div class="mb">
+          <div class="mt">${esc(m.title||'')}</div>
+          <div class="mm">${yr?`<span class="my">${yr}</span>`:''}${rt?`<span class="mr">${rt}</span>`:''}</div>
+          ${m._listName?`<div style="font-size:11px;color:var(--text3);margin-top:4px;">de ${esc(m._listName)}</div>`:''}
+        </div>
+      </div>
+      <div class="macts" style="padding-top:14px;">
+        <button class="act-btn star on" onclick="removeWish(this.closest('[data-id]'))" title="Quitar de wishlist">★</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+window.filterWish=q=>renderWish(q);
+
+window.openPreviewWish=(card)=>{
+  const{id,title,poster,date,rating}=card.dataset;
+  const yr=date?date.substring(0,4):'—';
+  const rt=rating&&rating!=='0'?'★ '+parseFloat(rating).toFixed(1):'';
+  openPreview(id,title||'',poster||'','',yr,rt,date||'',false);
+};
+
+window.removeWish=async(card)=>{
+  const id=sid(card.dataset.id);
+  const listId=card.dataset.listId||'';
+  try{
+    if(listId==='standalone'||!listId){
+      delete standaloneData.wish[id];
+      await saveStandalone();
+    }else{
+      const ref=doc(db,'users',cu.uid,'lists',listId);
+      const s=await getDoc(ref);
+      if(s.exists()){
+        const d=s.data();
+        const w=cleanForFirestore({...d.wish||{}});
+        delete w[id];
+        await setDoc(ref,{wish:w},{merge:true});
+      }
+      // If we're currently viewing this person's filmography, update local state too
+      if(pid===listId){
+        delete wish[id];
+        renderMovies();
+      }
+    }
+    await loadWishlist();
+    renderWish(document.getElementById('wish-fi')?.value||'');
+    showToast('Quitado de wishlist');
+  }catch(e){showErr('Error: '+e.message);}
+};
+
+// ── HOME ──
+async function renderHome(){
+  if(!cu)return;
+  try{
+    const s=await getDocs(collection(db,'users',cu.uid,'lists'));
+    const lists=[];s.forEach(d=>{if(d.data().name)lists.push(d.data());});
+    lists.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+    const rp=document.getElementById('recentPersons');
+    if(rp){
+      if(!lists.length){rp.innerHTML='<div class="home-empty">Buscá un director o actor y seguilo para verlo acá</div>';}
+      else{rp.innerHTML=lists.slice(0,12).map(l=>`
+        <div class="person-card" data-person-id="${l.personId}" data-person-name="${esc(l.name)}" data-person-photo="${esc(l.photo||'')}" data-person-dept="${esc(l.dept||'')}" onclick="loadPersonFromEl(this)">
+          ${l.photo?`<img src="https://image.tmdb.org/t/p/w92${l.photo}"/>`:`<div class="person-ph">👤</div>`}
+          <div class="person-card-name">${esc(l.name)}</div>
+        </div>`).join('');}
+    }
+    const hw=document.getElementById('homeWish');
+    if(hw){
+      const wishItems=allWishItems.slice(0,12);
+      if(!wishItems.length){hw.innerHTML='<div class="home-empty">Agregá películas a tu wishlist con ★</div>';}
+      else{hw.innerHTML=wishItems.map(m=>`
+        <div class="poster-card" data-id="${sid(m.id)}" data-title="${esc(m.title||'')}" data-poster="${esc(m.poster_path||'')}" data-date="${esc(m.release_date||'')}" data-rating="${m.vote_average||0}" onclick="openPreviewWish(this)">
+          ${m.poster_path?`<img src="https://image.tmdb.org/t/p/w154${m.poster_path}" loading="lazy"/>`:`<div class="poster-ph">🎬</div>`}
+          <div class="poster-overlay"><div class="poster-title">${esc(m.title||'')}</div>${m.release_date?`<div class="poster-year">${m.release_date.substring(0,4)}</div>`:''}</div>
+          <div class="poster-wish-badge">★</div>
+        </div>`).join('');}
+    }
+  }catch(e){}
+}
 
 // ── MY LISTS ──
 async function loadLists(){
   if(!cu)return;
-  try{const s=await getDocs(collection(db,'users',cu.uid,'lists'));
+  try{
+    const s=await getDocs(collection(db,'users',cu.uid,'lists'));
     allLists=[];s.forEach(d=>{if(d.data().name)allLists.push(d.data());});
-    allLists.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));renderLists(allLists);
-  }catch(e){document.getElementById('lgrid').innerHTML='<div class="empty-st">Error al cargar.</div>';}
+    allLists.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+    renderLists(allLists);
+    renderHome();
+  }catch(e){const el=document.getElementById('lgrid');if(el)el.innerHTML='<div class="empty-st">Error al cargar.</div>';}
 }
 function renderLists(list){
-  const el=document.getElementById('lgrid');
+  const el=document.getElementById('lgrid');if(!el)return;
   if(!list.length){el.innerHTML='<div class="empty-st" style="grid-column:1/-1"><span class="empty-ic">🎬</span>Todavía no seguís ninguna filmografía.<br>Buscá un director o actor y seguilo.</div>';return;}
   el.innerHTML=list.map(l=>{
     const sc=Object.keys(l.seen||{}).length;const tot=l.total||1;const pct=Math.round((sc/tot)*100);
-    return`<div class="lcard" onclick="loadPerson(${l.personId},'${esc(l.name)}','${esc(l.photo||'')}','${esc(l.dept||'')}',true)">
-      <button class="lcard-del" onclick="delList(event,${l.personId})" title="Dejar de seguir">✕</button>
+    return`<div class="lcard"
+        data-person-id="${l.personId}"
+        data-person-name="${esc(l.name)}"
+        data-person-photo="${esc(l.photo||'')}"
+        data-person-dept="${esc(l.dept||'')}"
+        onclick="loadPersonFromEl(this)">
+      <button class="lcard-del" onclick="event.stopPropagation();delList('${l.personId}')" title="Dejar de seguir">✕</button>
       <div class="lcard-av">${l.photo?`<img src="https://image.tmdb.org/t/p/w92${l.photo}"/>`:'👤'}</div>
       <div class="lcard-name">${esc(l.name)}</div>
       <div class="lcard-dept">${esc(l.dept||'')}</div>
@@ -1108,140 +1168,53 @@ function renderLists(list){
   }).join('');
 }
 window.filterLists=q=>renderLists(allLists.filter(l=>l.name.toLowerCase().includes(q.toLowerCase())));
-window.delList=async(e,id)=>{
-  e.stopPropagation();if(!confirm('¿Dejás de seguir esta filmografía? Perdés tu progreso.'))return;
-  try{await deleteDoc(doc(db,'users',cu.uid,'lists',String(id)));showToast('Eliminado');loadLists();renderHome();}
+window.delList=async(personId)=>{
+  if(!confirm('¿Dejás de seguir esta filmografía? Perdés tu progreso.'))return;
+  try{await deleteDoc(doc(db,'users',cu.uid,'lists',String(personId)));showToast('Eliminado');loadLists();}
   catch(e){showErr('No se pudo eliminar.');}
 };
 
-// ── MODAL ──
-window.oModal=(id,title)=>{
-  nmid=id;document.getElementById('mmt').textContent=title;
-  const idStr=String(id);
-  if(idStr.startsWith('standalone_')){const rid=parseInt(idStr.replace('standalone_',''));document.getElementById('mta').value=standaloneData.notes[rid]||'';}
-  else{document.getElementById('mta').value=notes[id]||'';}
-  document.getElementById('noteModal').style.display='flex';setTimeout(()=>document.getElementById('mta').focus(),100);
-};
-window.closeModal=()=>{document.getElementById('noteModal').style.display='none';nmid=null;};
-window.closeModalOut=e=>{if(e.target===document.getElementById('noteModal'))closeModal();};
-window.saveNote=async()=>{
-  const t=document.getElementById('mta').value.trim();
-  const idStr=String(nmid);
-  if(idStr.startsWith('standalone_')){
-    const rid=parseInt(idStr.replace('standalone_',''));
-    if(t){standaloneData.notes[rid]=t;}else{delete standaloneData.notes[rid];}
-    await saveStandalone();closeModal();showMovieDetail(rid);
-  }else{
-    if(t){notes[nmid]=t;}else{delete notes[nmid];}
-    closeModal();renderMovies();if(currentPersonIsFollowed)await saveUD();
-  }
-  showToast('Nota guardada ✓');
-};
-
-// Preview from wishlist (standalone context)
-window.openPreviewStandalone=async(id,title,poster,date,rating)=>{
+// ── PREVIEW MODAL ──
+window.openPreview=async(id,title,poster,orig,yr,rt,dateStr,isTV)=>{
   document.getElementById('prevModal').style.display='flex';
-  const key=id+'_false';
+  const key=sid(id)+'_'+(isTV?'tv':'m');
+  const sv=isTV?false:!!seen[sid(id)];
+  const wished=!!wish[sid(id)]||!!standaloneData.wish[sid(id)];
+  const nt=notes[sid(id)]||standaloneData.notes[sid(id)]||'';
+
+  // Show skeleton while loading
   document.getElementById('prev-content').innerHTML=`
     <div class="prev-backdrop-ph"></div>
     <div class="prev-body">
       <div class="prev-top">
-        ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">🎬</div>`}
-        <div class="prev-title-wrap"><div class="prev-title">${esc(title)}</div></div>
+        ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">${isTV?'📺':'🎬'}</div>`}
+        <div class="prev-title-wrap"><div class="prev-title">${esc(title)}</div>${orig&&orig!==title?`<div class="prev-orig">${esc(orig)}</div>`:''}</div>
       </div>
-      <div class="loading-m" style="padding:1rem 0;font-size:13px;">Cargando info...</div>
+      <div class="loading-m" style="padding:.75rem 0;font-size:12px;">Cargando...</div>
     </div>`;
-  if(!previewCache[key]){
-    try{
-      const[details,wprov]=await Promise.all([
-        tmdb('/movie/'+id,'es-419'),
-        fetch(BASE+'/movie/'+id+'/watch/providers',{headers:H}).then(r=>r.json())
-      ]);
-      const provData=parseProv(wprov);
-      const provHtml=provData.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
-      previewCache[key]={details,provHtml,backdrop:details.backdrop_path,runtime:details.runtime||null};
-    }catch(e){previewCache[key]={details:{},provHtml:'',backdrop:null,runtime:null};}
-  }
-  // Render using standalone data
-  const{details,provHtml,backdrop,runtime}=previewCache[key];
-  const sv=!!standaloneData.seen[id];const wished=!!standaloneData.wish[id];const nt=standaloneData.notes[id]||'';
-  const titleES=details.title||title;
-  const titleOrig=details.original_title||'';
-  const showOrig=titleOrig&&titleOrig.toLowerCase()!==titleES.toLowerCase();
-  const yr=date?date.substring(0,4):'';
-  const rt=details.vote_average?'★ '+details.vote_average.toFixed(1):(rating?'★ '+parseFloat(rating).toFixed(1):'');
-  const escT=esc(titleES);const escP=esc(poster);const escD=esc(date);
-  document.getElementById('prev-content').innerHTML=`
-    ${backdrop?`<img class="prev-backdrop" src="https://image.tmdb.org/t/p/w780${backdrop}" loading="lazy"/>`:`<div class="prev-backdrop-ph"></div>`}
-    <div class="prev-body">
-      <div class="prev-top">
-        ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">🎬</div>`}
-        <div class="prev-title-wrap">
-          <div class="prev-title">${esc(titleES)}</div>
-          ${showOrig?`<div class="prev-orig">${esc(titleOrig)}</div>`:''}
-        </div>
-      </div>
-      <div class="prev-meta">
-        ${yr?`<span class="prev-badge">${yr}</span>`:''}
-        ${runtime?`<span class="prev-badge">${runtime} min</span>`:''}
-        ${rt?`<span class="prev-rating">${rt}</span>`:''}
-      </div>
-      ${provHtml?`<div class="prev-plats">${provHtml}</div>`:''}
-      ${details.overview?`<div class="prev-overview">${esc(details.overview)}</div>`:''}
-      ${nt?`<div class="prev-note"><div class="prev-note-label">Mi análisis</div><div class="prev-note-text">${esc(nt)}</div></div>`:''}
-      <div class="prev-actions">
-        <button class="prev-btn check ${sv?'on':''}" onclick="toggleStandaloneSeen(${id},'${escT}','${escP}','${escD}',${details.vote_average||rating||0});closePreview();">
-          ✓ ${sv?'Vista':'Marcar como vista'}
-        </button>
-        <button class="prev-btn star ${wished?'on':''}" onclick="toggleStandaloneWish(${id},'${escT}','${escP}','${escD}',${details.vote_average||rating||0});closePreview();">
-          ★ ${wished?'En wishlist':'Wishlist'}
-        </button>
-        <button class="prev-btn pen ${nt?'on':''}" onclick="closePreview();oModal('standalone_${id}','${escT}')">
-          ✏ ${nt?'Editar nota':'Agregar nota'}
-        </button>
-      </div>
-    </div>`;
-};
 
-// ── MOVIE PREVIEW ──
-let previewCache={};
-window.openPreview=async(id,title,poster,orig,yr,rt,dateStr,isTV)=>{
-  document.getElementById('prevModal').style.display='flex';
-  const key=id+'_'+isTV;
   if(!previewCache[key]){
-    document.getElementById('prev-content').innerHTML=`
-      <div class="prev-backdrop-ph"></div>
-      <div class="prev-body">
-        <div class="prev-top">
-          ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">🎬</div>`}
-          <div class="prev-title-wrap"><div class="prev-title">${esc(title)}</div>${orig&&orig!==title?`<div class="prev-orig">${esc(orig)}</div>`:''}</div>
-        </div>
-        <div class="loading-m" style="padding:1rem 0;font-size:13px;">Cargando info...</div>
-      </div>`;
     try{
       const endpoint=isTV?'/tv/'+id:'/movie/'+id;
       const[details,wprov]=await Promise.all([
-        tmdb(endpoint,'es-AR'),
+        tmdb(endpoint,'es-419'),
         fetch(BASE+(isTV?'/tv/'+id:'/movie/'+id)+'/watch/providers',{headers:H}).then(r=>r.json())
       ]);
-      const provData=parseProv(wprov);
-      const provHtml=provData.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
-      const backdrop=details.backdrop_path;
-      const runtime=details.runtime||(details.episode_run_time||[])[0]||null;
-      previewCache[key]={details,provHtml,backdrop,runtime};
+      previewCache[key]={
+        details,
+        provHtml:parseProv(wprov).map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join(''),
+        backdrop:details.backdrop_path||null,
+        runtime:details.runtime||(details.episode_run_time||[])[0]||null
+      };
     }catch(e){previewCache[key]={details:{},provHtml:'',backdrop:null,runtime:null};}
   }
-  renderPreview(id,title,poster,orig,yr,rt,dateStr,isTV,key);
-};
-
-function renderPreview(id,title,poster,orig,yr,rt,dateStr,isTV,key){
-  const{details,provHtml,backdrop,runtime}=previewCache[key]||{details:{},provHtml:'',backdrop:null,runtime:null};
-  const sv=!!seen[id];const wished=!!wish[id];const nt=notes[id]||'';
-  const overview=details.overview||'';
+  const{details,provHtml,backdrop,runtime}=previewCache[key];
   const titleES=details.title||details.name||title;
   const titleOrig=details.original_title||details.original_name||orig||'';
   const showOrig=titleOrig&&titleOrig.toLowerCase()!==titleES.toLowerCase();
-  const escTitle=esc(title);const escPoster=esc(poster);const escDate=esc(dateStr);const escOrig=esc(titleOrig);
+  const overview=details.overview||'';
+  const idStr=sid(id);
+
   document.getElementById('prev-content').innerHTML=`
     ${backdrop?`<img class="prev-backdrop" src="https://image.tmdb.org/t/p/w780${backdrop}" loading="lazy"/>`:`<div class="prev-backdrop-ph"></div>`}
     <div class="prev-body">
@@ -1256,51 +1229,77 @@ function renderPreview(id,title,poster,orig,yr,rt,dateStr,isTV,key){
         ${yr&&yr!=='—'?`<span class="prev-badge">${yr}</span>`:''}
         ${runtime?`<span class="prev-badge">${runtime} min</span>`:''}
         ${rt?`<span class="prev-rating">${rt}</span>`:''}
-        ${isTV&&details.number_of_seasons?`<span class="prev-badge">${details.number_of_seasons} temporada${details.number_of_seasons>1?'s':''}</span>`:''}
+        ${isTV&&details.number_of_seasons?`<span class="prev-badge">${details.number_of_seasons} temp.</span>`:''}
       </div>
       ${provHtml?`<div class="prev-plats">${provHtml}</div>`:''}
       ${overview?`<div class="prev-overview">${esc(overview)}</div>`:''}
       ${nt?`<div class="prev-note"><div class="prev-note-label">Mi análisis</div><div class="prev-note-text">${esc(nt)}</div></div>`:''}
-      <div class="prev-actions">
-        <button class="prev-btn check ${sv?'on':''}" onclick="tSeenFromPreview(${id},'${escTitle}','${escPoster}','${escDate}',${details.vote_average||0},${isTV})">
-          ✓ ${sv?'Vista':'Marcar como vista'}
+      <div class="prev-actions"
+        data-id="${idStr}"
+        data-title="${esc(titleES)}"
+        data-poster="${esc(poster||'')}"
+        data-date="${esc(dateStr||'')}"
+        data-rating="${details.vote_average||0}"
+        data-istv="${isTV}">
+        <button class="prev-btn check ${seen[idStr]||standaloneData.seen[idStr]?'on':''}" onclick="prevActSeen(this.closest('[data-id]'))">
+          ✓ ${seen[idStr]||standaloneData.seen[idStr]?'Vista':'Marcar como vista'}
         </button>
-        <button class="prev-btn star ${wished?'on':''}" onclick="tWishFromPreview(${id},'${escTitle}','${escPoster}','${escDate}',${details.vote_average||0},${isTV})">
-          ★ ${wished?'En wishlist':'Wishlist'}
+        <button class="prev-btn star ${wish[idStr]||standaloneData.wish[idStr]?'on':''}" onclick="prevActWish(this.closest('[data-id]'))">
+          ★ ${wish[idStr]||standaloneData.wish[idStr]?'En wishlist':'Wishlist'}
         </button>
-        <button class="prev-btn pen ${nt?'on':''}" onclick="oModalFromPreview(${id},'${escTitle}',${isTV},'${escPoster}','${escDate}',${details.vote_average||0})">
+        <button class="prev-btn pen ${nt?'on':''}" onclick="closePreview();oModal('${pid?'':'standalone_'}${idStr}','${esc(titleES)}')">
           ✏ ${nt?'Editar nota':'Agregar nota'}
         </button>
       </div>
     </div>`;
-}
-
+};
+window.prevActSeen=async(el)=>{
+  const id=sid(el.dataset.id);
+  if(pid){await actSeen({dataset:{id}});}
+  else{await toggleStandaloneSeen({dataset:{id,title:el.dataset.title,poster:el.dataset.poster,date:el.dataset.date,rating:el.dataset.rating}});}
+  closePreview();
+};
+window.prevActWish=async(el)=>{
+  const id=sid(el.dataset.id);
+  if(pid){await actWish({dataset:{id,title:el.dataset.title,poster:el.dataset.poster,date:el.dataset.date,rating:el.dataset.rating}});}
+  else{await toggleStandaloneWish({dataset:{id,title:el.dataset.title,poster:el.dataset.poster,date:el.dataset.date,rating:el.dataset.rating}});}
+  closePreview();
+};
 window.closePreview=()=>{document.getElementById('prevModal').style.display='none';};
 window.closePrevOut=e=>{if(e.target===document.getElementById('prevModal'))closePreview();};
 
-window.tSeenFromPreview=async(id,title,poster,date,rating,isTV)=>{
-  if(seen[id]){delete seen[id];}else{seen[id]=true;if(wish[id])delete wish[id];}
-  renderMovies();if(currentPersonIsFollowed)await saveUD();
-  const key=id+'_'+isTV;
-  renderPreview(id,title,poster,'',date?.substring?.(0,4)||'—',rating?'★ '+parseFloat(rating).toFixed(1):'',date,isTV,key);
-  showToast(seen[id]?'Marcado como visto ✓':'Desmarcado');
+// ── NOTE MODAL ──
+window.oModal=(id,title)=>{
+  nmid=String(id);
+  document.getElementById('mmt').textContent=title;
+  const idStr=String(id);
+  const isStandalone=idStr.startsWith('standalone_');
+  const realId=isStandalone?idStr.replace('standalone_',''):idStr;
+  document.getElementById('mta').value=isStandalone?(standaloneData.notes[realId]||''):(notes[realId]||'');
+  document.getElementById('noteModal').style.display='flex';
+  setTimeout(()=>document.getElementById('mta').focus(),100);
 };
-window.tWishFromPreview=async(id,title,poster,date,rating,isTV)=>{
-  const wasWished=!!wish[id];
-  if(wasWished){delete wish[id];}else{wish[id]={id,title,poster_path:poster,release_date:date,vote_average:rating,addedAt:Date.now()};}
-  renderMovies();if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
-  const key=id+'_'+isTV;
-  renderPreview(id,title,poster,'',date?.substring?.(0,4)||'—',rating?'★ '+parseFloat(rating).toFixed(1):'',date,isTV,key);
-  showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
-};
-window.oModalFromPreview=(id,title,isTV,poster,date,rating)=>{
-  closePreview();
-  oModal(id,title);
+window.closeModal=()=>{document.getElementById('noteModal').style.display='none';nmid=null;};
+window.closeModalOut=e=>{if(e.target===document.getElementById('noteModal'))closeModal();};
+window.saveNote=async()=>{
+  const t=document.getElementById('mta').value.trim();
+  const idStr=String(nmid);
+  const isStandalone=idStr.startsWith('standalone_');
+  const realId=isStandalone?idStr.replace('standalone_',''):idStr;
+  if(isStandalone){
+    if(t)standaloneData.notes[realId]=t;else delete standaloneData.notes[realId];
+    await saveStandalone();
+    closeModal();
+    if(document.getElementById('view-movie').classList.contains('active'))showMovieDetail(realId);
+  }else{
+    if(t)notes[realId]=t;else delete notes[realId];
+    closeModal();
+    renderMovies();
+    if(currentPersonIsFollowed)await saveUD();
+  }
+  showToast('Nota guardada ✓');
 };
 
-function showErr(m){document.getElementById('errMsg').innerHTML=m?`<div class="err-bar">${esc(m)}</div>`:'';}
-function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 </script>
 </body>
 </html>

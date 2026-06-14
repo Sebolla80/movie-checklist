@@ -580,7 +580,7 @@ onAuthStateChanged(auth,u=>{
   }
 });
 
-async function tmdb(p,lang='es-AR'){
+async function tmdb(p,lang='es-419'){
   const r=await fetch(BASE+p+(p.includes('?')?'&':'?')+'language='+lang,{headers:H});
   if(!r.ok)throw new Error('Error '+r.status);return r.json();
 }
@@ -660,9 +660,9 @@ window.showMovieDetail=async(id)=>{
   document.getElementById('movie-detail').innerHTML='<div class="loading-m">Cargando...</div>';
   try{
     const[mES,mEN,cred,wprov]=await Promise.all([
-      tmdb('/movie/'+id,'es-AR'),
+      tmdb('/movie/'+id,'es-419'),
       tmdb('/movie/'+id,'en-US'),
-      tmdb('/movie/'+id+'/credits','es-AR'),
+      tmdb('/movie/'+id+'/credits','es-419'),
       fetch(BASE+'/movie/'+id+'/watch/providers',{headers:H}).then(r=>r.json())
     ]);
     const director=(cred.crew||[]).find(c=>c.job==='Director');
@@ -747,8 +747,8 @@ window.loadPerson=async(id,name,photo,dept,fromList=false)=>{
   try{
     await loadUD(id);
     const[crA,tvA,crO,tvO]=await Promise.all([
-      tmdb('/person/'+id+'/movie_credits','es-AR'),
-      tmdb('/person/'+id+'/tv_credits','es-AR'),
+      tmdb('/person/'+id+'/movie_credits','es-419'),
+      tmdb('/person/'+id+'/tv_credits','es-419'),
       tmdb('/person/'+id+'/movie_credits','en-US'),
       tmdb('/person/'+id+'/tv_credits','en-US')
     ]);
@@ -865,12 +865,15 @@ function renderWish(q=''){
   el.innerHTML=list.map(m=>{
     const yr=m.release_date?m.release_date.substring(0,4):'';
     const rt=m.vote_average?'★ '+parseFloat(m.vote_average).toFixed(1):'';
+    const escT=esc(m.title||'');const escP=esc(m.poster_path||'');const escD=esc(m.release_date||'');
     return`<div class="mc wished">
-      ${m.poster_path?`<img class="mp" src="https://image.tmdb.org/t/p/w92${m.poster_path}" loading="lazy"/>`:`<div class="mp-ph">🎬</div>`}
-      <div class="mb">
-        <div class="mt">${esc(m.title||'')}</div>
-        <div class="mm">${yr?`<span class="my">${yr}</span>`:''}${rt?`<span class="mr">${rt}</span>`:''}</div>
-        ${m._listName?`<div style="font-size:11px;color:var(--text3);margin-top:4px;">de ${esc(m._listName)}</div>`:''}
+      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreviewStandalone(${m.id},'${escT}','${escP}','${escD}',${m.vote_average||0})">
+        ${m.poster_path?`<img class="mp" src="https://image.tmdb.org/t/p/w92${m.poster_path}" loading="lazy"/>`:`<div class="mp-ph">🎬</div>`}
+        <div class="mb">
+          <div class="mt">${escT}</div>
+          <div class="mm">${yr?`<span class="my">${yr}</span>`:''}${rt?`<span class="mr">${rt}</span>`:''}</div>
+          ${m._listName?`<div style="font-size:11px;color:var(--text3);margin-top:4px;">de ${esc(m._listName)}</div>`:''}
+        </div>
       </div>
       <div class="macts" style="padding-top:14px;">
         <button class="act-btn star on" onclick="removeWish('${m._listId}',${m.id})" title="Quitar de wishlist">★</button>
@@ -882,10 +885,29 @@ window.filterWish=q=>renderWish(q);
 window.removeWish=async(listId,movieId)=>{
   if(!cu)return;
   try{
-    if(listId==='standalone'){delete standaloneData.wish[movieId];await saveStandalone();}
-    else{const ref=doc(db,'users',cu.uid,'lists',String(listId));const s=await getDoc(ref);if(s.exists()){const d=s.data();const w=d.wish||{};delete w[movieId];await setDoc(ref,{wish:w},{merge:true});}}
-    await loadWishlist();renderWish(document.getElementById('wish-fi').value);showToast('Quitado de wishlist');
-  }catch(e){showErr('Error.');}
+    if(listId==='standalone'){
+      delete standaloneData.wish[movieId];
+      await saveStandalone();
+    }else{
+      // Update Firestore
+      const ref=doc(db,'users',cu.uid,'lists',String(listId));
+      const s=await getDoc(ref);
+      if(s.exists()){
+        const d=s.data();
+        const w=d.wish||{};
+        delete w[movieId];
+        await setDoc(ref,{wish:w},{merge:true});
+      }
+      // Also update local wish object if we're viewing this person's list
+      if(pid===String(listId)){
+        delete wish[movieId];
+        renderMovies();
+      }
+    }
+    await loadWishlist();
+    renderWish(document.getElementById('wish-fi').value);
+    showToast('Quitado de wishlist');
+  }catch(e){showErr('Error al actualizar wishlist.');}
 };
 
 // ── HOME ──
@@ -1047,6 +1069,71 @@ window.saveNote=async()=>{
     closeModal();renderMovies();if(currentPersonIsFollowed)await saveUD();
   }
   showToast('Nota guardada ✓');
+};
+
+// Preview from wishlist (standalone context)
+window.openPreviewStandalone=async(id,title,poster,date,rating)=>{
+  document.getElementById('prevModal').style.display='flex';
+  const key=id+'_false';
+  document.getElementById('prev-content').innerHTML=`
+    <div class="prev-backdrop-ph"></div>
+    <div class="prev-body">
+      <div class="prev-top">
+        ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">🎬</div>`}
+        <div class="prev-title-wrap"><div class="prev-title">${esc(title)}</div></div>
+      </div>
+      <div class="loading-m" style="padding:1rem 0;font-size:13px;">Cargando info...</div>
+    </div>`;
+  if(!previewCache[key]){
+    try{
+      const[details,wprov]=await Promise.all([
+        tmdb('/movie/'+id,'es-419'),
+        fetch(BASE+'/movie/'+id+'/watch/providers',{headers:H}).then(r=>r.json())
+      ]);
+      const provData=parseProv(wprov);
+      const provHtml=provData.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
+      previewCache[key]={details,provHtml,backdrop:details.backdrop_path,runtime:details.runtime||null};
+    }catch(e){previewCache[key]={details:{},provHtml:'',backdrop:null,runtime:null};}
+  }
+  // Render using standalone data
+  const{details,provHtml,backdrop,runtime}=previewCache[key];
+  const sv=!!standaloneData.seen[id];const wished=!!standaloneData.wish[id];const nt=standaloneData.notes[id]||'';
+  const titleES=details.title||title;
+  const titleOrig=details.original_title||'';
+  const showOrig=titleOrig&&titleOrig.toLowerCase()!==titleES.toLowerCase();
+  const yr=date?date.substring(0,4):'';
+  const rt=details.vote_average?'★ '+details.vote_average.toFixed(1):(rating?'★ '+parseFloat(rating).toFixed(1):'');
+  const escT=esc(titleES);const escP=esc(poster);const escD=esc(date);
+  document.getElementById('prev-content').innerHTML=`
+    ${backdrop?`<img class="prev-backdrop" src="https://image.tmdb.org/t/p/w780${backdrop}" loading="lazy"/>`:`<div class="prev-backdrop-ph"></div>`}
+    <div class="prev-body">
+      <div class="prev-top">
+        ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">🎬</div>`}
+        <div class="prev-title-wrap">
+          <div class="prev-title">${esc(titleES)}</div>
+          ${showOrig?`<div class="prev-orig">${esc(titleOrig)}</div>`:''}
+        </div>
+      </div>
+      <div class="prev-meta">
+        ${yr?`<span class="prev-badge">${yr}</span>`:''}
+        ${runtime?`<span class="prev-badge">${runtime} min</span>`:''}
+        ${rt?`<span class="prev-rating">${rt}</span>`:''}
+      </div>
+      ${provHtml?`<div class="prev-plats">${provHtml}</div>`:''}
+      ${details.overview?`<div class="prev-overview">${esc(details.overview)}</div>`:''}
+      ${nt?`<div class="prev-note"><div class="prev-note-label">Mi análisis</div><div class="prev-note-text">${esc(nt)}</div></div>`:''}
+      <div class="prev-actions">
+        <button class="prev-btn check ${sv?'on':''}" onclick="toggleStandaloneSeen(${id},'${escT}','${escP}','${escD}',${details.vote_average||rating||0});closePreview();">
+          ✓ ${sv?'Vista':'Marcar como vista'}
+        </button>
+        <button class="prev-btn star ${wished?'on':''}" onclick="toggleStandaloneWish(${id},'${escT}','${escP}','${escD}',${details.vote_average||rating||0});closePreview();">
+          ★ ${wished?'En wishlist':'Wishlist'}
+        </button>
+        <button class="prev-btn pen ${nt?'on':''}" onclick="closePreview();oModal('standalone_${id}','${escT}')">
+          ✏ ${nt?'Editar nota':'Agregar nota'}
+        </button>
+      </div>
+    </div>`;
 };
 
 // ── MOVIE PREVIEW ──

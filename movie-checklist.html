@@ -251,6 +251,36 @@ body{color:var(--text);font-family:'Inter',sans-serif;font-size:15px;display:fle
 .tbtab-wish.active{color:var(--amber);}
 .tbtab-icon{font-size:20px;line-height:1;}
 
+/* ── MOVIE PREVIEW MODAL ── */
+.prev-ov{position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:290;backdrop-filter:blur(8px);padding:1rem;}
+.prev-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 0 80px rgba(30,111,255,0.1);position:relative;}
+.prev-backdrop{width:100%;height:160px;object-fit:cover;object-position:center 20%;border-radius:var(--r) var(--r) 0 0;display:block;background:var(--surface);}
+.prev-backdrop-ph{width:100%;height:100px;background:linear-gradient(135deg,var(--surface),var(--surface2));border-radius:var(--r) var(--r) 0 0;}
+.prev-body{padding:1.25rem;}
+.prev-top{display:flex;gap:1rem;margin-top:-48px;position:relative;align-items:flex-end;}
+.prev-poster{width:80px;height:120px;border-radius:var(--r-sm);object-fit:cover;background:var(--surface);border:2px solid var(--bg2);flex-shrink:0;box-shadow:0 8px 24px rgba(0,0,0,0.5);}
+.prev-poster-ph{width:80px;height:120px;border-radius:var(--r-sm);background:var(--surface);border:2px solid var(--bg2);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;}
+.prev-title-wrap{flex:1;padding-bottom:2px;}
+.prev-title{font-family:'Space Grotesk',sans-serif;font-size:1.1rem;font-weight:700;line-height:1.2;margin-top:4px;}
+.prev-orig{font-size:11px;color:var(--text3);font-style:italic;margin-top:3px;}
+.prev-close{position:absolute;top:.75rem;right:.75rem;background:rgba(0,0,0,0.55);border:1px solid var(--border2);color:var(--text2);width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;transition:all .15s;z-index:10;}
+.prev-close:hover{background:rgba(0,0,0,0.85);color:var(--text);}
+.prev-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:.75rem;align-items:center;}
+.prev-badge{font-size:11px;color:var(--text2);background:var(--surface);padding:3px 10px;border-radius:20px;border:1px solid var(--border);}
+.prev-rating{font-size:13px;color:var(--amber);font-weight:600;}
+.prev-plats{display:flex;gap:4px;flex-wrap:wrap;margin-top:.75rem;}
+.prev-overview{font-size:13px;color:var(--text2);line-height:1.7;margin-top:.75rem;}
+.prev-note{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r-sm);padding:.75rem 1rem;margin-top:.75rem;}
+.prev-note-label{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.3rem;}
+.prev-note-text{font-size:13px;color:var(--text2);font-style:italic;line-height:1.6;}
+.prev-actions{display:flex;gap:8px;margin-top:1rem;flex-wrap:wrap;}
+.prev-btn{padding:8px 14px;border-radius:var(--r-sm);font-size:12px;font-weight:500;font-family:'Inter',sans-serif;cursor:pointer;border:1px solid var(--border2);background:var(--surface);color:var(--text);transition:all .15s;display:flex;align-items:center;gap:6px;}
+.prev-btn:hover{background:var(--surface2);}
+.prev-btn.check.on{border-color:var(--green-b);background:var(--green-dim);color:var(--green);}
+.prev-btn.star.on{border-color:rgba(245,166,35,0.3);background:var(--amber-dim);color:var(--amber);}
+.prev-btn.pen.on{border-color:rgba(155,89,255,0.3);background:var(--violet-dim);color:var(--violet);}
+@media(max-width:500px){.prev-modal{max-height:95vh;}.prev-backdrop{height:100px;}}
+
 /* ── MODAL ── */
 .modal-ov{position:fixed;inset:0;background:rgba(0,0,0,0.82);display:flex;align-items:center;justify-content:center;z-index:300;backdrop-filter:blur(6px);padding:1rem;}
 .modal{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:1.5rem;width:100%;max-width:460px;box-shadow:0 0 60px rgba(30,111,255,0.07);}
@@ -478,6 +508,14 @@ body{color:var(--text);font-family:'Inter',sans-serif;font-size:15px;display:fle
     <button class="tbtab active" id="tb-home" onclick="showView('home')"><span class="tbtab-icon">🏠</span>Inicio</button>
     <button class="tbtab tbtab-wish" id="tb-wish" onclick="showView('wish')"><span class="tbtab-icon">★</span>Wishlist</button>
     <button class="tbtab" id="tb-lists" onclick="showView('lists')"><span class="tbtab-icon">🎬</span>Mis listas</button>
+  </div>
+</div>
+
+<!-- MOVIE PREVIEW MODAL -->
+<div id="prevModal" class="prev-ov" style="display:none;" onclick="closePrevOut(event)">
+  <div class="prev-modal">
+    <button class="prev-close" onclick="closePreview()">✕</button>
+    <div id="prev-content"></div>
   </div>
 </div>
 
@@ -920,19 +958,22 @@ function renderMovies(){
     const sv=!!seen[m.id];const wished=!!wish[m.id];const nt=notes[m.id]||'';
     const pl=prov[m.id]||[];
     const ph=pl.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
+    const escT=esc(title);const escP=esc(poster);const escD=esc(dateStr);const escO=esc(orig);
     return`<div class="mc ${sv?'seen':wished?'wished':''}">
-      ${poster?`<img class="mp" src="https://image.tmdb.org/t/p/w92${poster}" loading="lazy" alt="${esc(title)}"/>`:`<div class="mp-ph">${isTV?'📺':'🎬'}</div>`}
-      <div class="mb">
-        <div class="mt">${esc(title)}</div>
-        ${showOrig?`<div class="mt-orig">${esc(orig)}</div>`:''}
-        <div class="mm"><span class="my">${yr}</span>${rt?`<span class="mr">${rt}</span>`:''}</div>
-        ${ph?`<div class="plats">${ph}</div>`:''}
-        ${nt?`<div class="mn-prev">${esc(nt)}</div>`:''}
+      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreview(${m.id},'${escT}','${escP}','${escO}','${yr}','${rt}','${escD}',${isTV})">
+        ${poster?`<img class="mp" src="https://image.tmdb.org/t/p/w92${poster}" loading="lazy" alt="${escT}"/>`:`<div class="mp-ph">${isTV?'📺':'🎬'}</div>`}
+        <div class="mb">
+          <div class="mt">${escT}</div>
+          ${showOrig?`<div class="mt-orig">${escO}</div>`:''}
+          <div class="mm"><span class="my">${yr}</span>${rt?`<span class="mr">${rt}</span>`:''}</div>
+          ${ph?`<div class="plats">${ph}</div>`:''}
+          ${nt?`<div class="mn-prev">${esc(nt)}</div>`:''}
+        </div>
       </div>
       <div class="macts">
         <button class="act-btn check ${sv?'on':''}" onclick="tSeen(${m.id})" title="${sv?'Desmarcar':'Marcar como visto'}">✓</button>
-        <button class="act-btn star ${wished?'on':''}" onclick="tWish(${m.id},'${esc(title)}','${esc(poster)}','${esc(dateStr)}',${m.vote_average||0})" title="${wished?'Quitar de wishlist':'Agregar a wishlist'}">★</button>
-        <button class="act-btn pen ${nt?'on':''}" onclick="oModal(${m.id},'${esc(title)}')" title="Nota">✏</button>
+        <button class="act-btn star ${wished?'on':''}" onclick="tWish(${m.id},'${escT}','${escP}','${escD}',${m.vote_average||0})" title="${wished?'Quitar de wishlist':'Agregar a wishlist'}">★</button>
+        <button class="act-btn pen ${nt?'on':''}" onclick="oModal(${m.id},'${escT}')" title="Nota">✏</button>
       </div>
     </div>`;
   }).join('');
@@ -944,9 +985,11 @@ window.tSeen=async id=>{
   showToast(seen[id]?'Marcado como visto ✓':'Desmarcado');
 };
 window.tWish=async(id,title,poster,date,rating)=>{
-  if(wish[id]){delete wish[id];}else{wish[id]={id,title,poster_path:poster,release_date:date,vote_average:rating,addedAt:Date.now()};}
-  renderMovies();if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
-  showToast(wish[id]?'Agregado a wishlist ★':'Quitado de wishlist');
+  const wasWished=!!wish[id];
+  if(wasWished){delete wish[id];}else{wish[id]={id,title,poster_path:poster,release_date:date,vote_average:rating,addedAt:Date.now()};}
+  renderMovies();
+  if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
+  showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
 };
 window.setCTab=(tab,btn)=>{cTab=tab;filt='all';document.querySelectorAll('.ctab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));document.querySelector('.fb').classList.add('active');renderMovies();};
 window.setFilt=(f,btn)=>{filt=f;document.querySelectorAll('.fb').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderMovies();};
@@ -1004,6 +1047,101 @@ window.saveNote=async()=>{
     closeModal();renderMovies();if(currentPersonIsFollowed)await saveUD();
   }
   showToast('Nota guardada ✓');
+};
+
+// ── MOVIE PREVIEW ──
+let previewCache={};
+window.openPreview=async(id,title,poster,orig,yr,rt,dateStr,isTV)=>{
+  document.getElementById('prevModal').style.display='flex';
+  const key=id+'_'+isTV;
+  if(!previewCache[key]){
+    document.getElementById('prev-content').innerHTML=`
+      <div class="prev-backdrop-ph"></div>
+      <div class="prev-body">
+        <div class="prev-top">
+          ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">🎬</div>`}
+          <div class="prev-title-wrap"><div class="prev-title">${esc(title)}</div>${orig&&orig!==title?`<div class="prev-orig">${esc(orig)}</div>`:''}</div>
+        </div>
+        <div class="loading-m" style="padding:1rem 0;font-size:13px;">Cargando info...</div>
+      </div>`;
+    try{
+      const endpoint=isTV?'/tv/'+id:'/movie/'+id;
+      const[details,wprov]=await Promise.all([
+        tmdb(endpoint,'es-AR'),
+        fetch(BASE+(isTV?'/tv/'+id:'/movie/'+id)+'/watch/providers',{headers:H}).then(r=>r.json())
+      ]);
+      const provData=parseProv(wprov);
+      const provHtml=provData.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
+      const backdrop=details.backdrop_path;
+      const runtime=details.runtime||(details.episode_run_time||[])[0]||null;
+      previewCache[key]={details,provHtml,backdrop,runtime};
+    }catch(e){previewCache[key]={details:{},provHtml:'',backdrop:null,runtime:null};}
+  }
+  renderPreview(id,title,poster,orig,yr,rt,dateStr,isTV,key);
+};
+
+function renderPreview(id,title,poster,orig,yr,rt,dateStr,isTV,key){
+  const{details,provHtml,backdrop,runtime}=previewCache[key]||{details:{},provHtml:'',backdrop:null,runtime:null};
+  const sv=!!seen[id];const wished=!!wish[id];const nt=notes[id]||'';
+  const overview=details.overview||'';
+  const titleES=details.title||details.name||title;
+  const titleOrig=details.original_title||details.original_name||orig||'';
+  const showOrig=titleOrig&&titleOrig.toLowerCase()!==titleES.toLowerCase();
+  const escTitle=esc(title);const escPoster=esc(poster);const escDate=esc(dateStr);const escOrig=esc(titleOrig);
+  document.getElementById('prev-content').innerHTML=`
+    ${backdrop?`<img class="prev-backdrop" src="https://image.tmdb.org/t/p/w780${backdrop}" loading="lazy"/>`:`<div class="prev-backdrop-ph"></div>`}
+    <div class="prev-body">
+      <div class="prev-top">
+        ${poster?`<img class="prev-poster" src="https://image.tmdb.org/t/p/w185${poster}"/>`:`<div class="prev-poster-ph">${isTV?'📺':'🎬'}</div>`}
+        <div class="prev-title-wrap">
+          <div class="prev-title">${esc(titleES)}</div>
+          ${showOrig?`<div class="prev-orig">${esc(titleOrig)}</div>`:''}
+        </div>
+      </div>
+      <div class="prev-meta">
+        ${yr&&yr!=='—'?`<span class="prev-badge">${yr}</span>`:''}
+        ${runtime?`<span class="prev-badge">${runtime} min</span>`:''}
+        ${rt?`<span class="prev-rating">${rt}</span>`:''}
+        ${isTV&&details.number_of_seasons?`<span class="prev-badge">${details.number_of_seasons} temporada${details.number_of_seasons>1?'s':''}</span>`:''}
+      </div>
+      ${provHtml?`<div class="prev-plats">${provHtml}</div>`:''}
+      ${overview?`<div class="prev-overview">${esc(overview)}</div>`:''}
+      ${nt?`<div class="prev-note"><div class="prev-note-label">Mi análisis</div><div class="prev-note-text">${esc(nt)}</div></div>`:''}
+      <div class="prev-actions">
+        <button class="prev-btn check ${sv?'on':''}" onclick="tSeenFromPreview(${id},'${escTitle}','${escPoster}','${escDate}',${details.vote_average||0},${isTV})">
+          ✓ ${sv?'Vista':'Marcar como vista'}
+        </button>
+        <button class="prev-btn star ${wished?'on':''}" onclick="tWishFromPreview(${id},'${escTitle}','${escPoster}','${escDate}',${details.vote_average||0},${isTV})">
+          ★ ${wished?'En wishlist':'Wishlist'}
+        </button>
+        <button class="prev-btn pen ${nt?'on':''}" onclick="oModalFromPreview(${id},'${escTitle}',${isTV},'${escPoster}','${escDate}',${details.vote_average||0})">
+          ✏ ${nt?'Editar nota':'Agregar nota'}
+        </button>
+      </div>
+    </div>`;
+}
+
+window.closePreview=()=>{document.getElementById('prevModal').style.display='none';};
+window.closePrevOut=e=>{if(e.target===document.getElementById('prevModal'))closePreview();};
+
+window.tSeenFromPreview=async(id,title,poster,date,rating,isTV)=>{
+  if(seen[id]){delete seen[id];}else{seen[id]=true;if(wish[id])delete wish[id];}
+  renderMovies();if(currentPersonIsFollowed)await saveUD();
+  const key=id+'_'+isTV;
+  renderPreview(id,title,poster,'',date?.substring?.(0,4)||'—',rating?'★ '+parseFloat(rating).toFixed(1):'',date,isTV,key);
+  showToast(seen[id]?'Marcado como visto ✓':'Desmarcado');
+};
+window.tWishFromPreview=async(id,title,poster,date,rating,isTV)=>{
+  const wasWished=!!wish[id];
+  if(wasWished){delete wish[id];}else{wish[id]={id,title,poster_path:poster,release_date:date,vote_average:rating,addedAt:Date.now()};}
+  renderMovies();if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
+  const key=id+'_'+isTV;
+  renderPreview(id,title,poster,'',date?.substring?.(0,4)||'—',rating?'★ '+parseFloat(rating).toFixed(1):'',date,isTV,key);
+  showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
+};
+window.oModalFromPreview=(id,title,isTV,poster,date,rating)=>{
+  closePreview();
+  oModal(id,title);
 };
 
 function showErr(m){document.getElementById('errMsg').innerHTML=m?`<div class="err-bar">${esc(m)}</div>`:'';}

@@ -835,7 +835,28 @@ async function loadUD(id){
 }
 async function saveUD(){
   if(!cu||!pid||!currentPersonIsFollowed)return;
-  try{await setDoc(doc(db,'users',cu.uid,'lists',pid),{seen,notes,wish},{merge:true});}catch(e){showErr('No se pudo guardar.');}
+  try{
+    // Clean objects — Firestore rejects undefined values
+    const cleanObj=obj=>{
+      const out={};
+      Object.keys(obj).forEach(k=>{
+        const v=obj[k];
+        if(v===undefined||v===null)return;
+        if(typeof v==='object'&&!Array.isArray(v)){
+          const cleaned=cleanObj(v);
+          if(Object.keys(cleaned).length>0)out[k]=cleaned;
+        }else{
+          out[k]=v;
+        }
+      });
+      return out;
+    };
+    await setDoc(doc(db,'users',cu.uid,'lists',pid),{
+      seen:cleanObj(seen),
+      notes:cleanObj(notes),
+      wish:cleanObj(wish)
+    },{merge:true});
+  }catch(e){showErr('No se pudo guardar: '+e.message);}
 }
 async function saveMeta(id,name,photo,dept,total){
   if(!cu)return;
@@ -1017,7 +1038,18 @@ window.tSeen=async id=>{
 window.tWish=async(id,title,poster,date,rating)=>{
   const sid=String(id);
   const wasWished=!!wish[sid];
-  if(wasWished){delete wish[sid];}else{wish[sid]={id:sid,title,poster_path:poster,release_date:date,vote_average:rating,addedAt:Date.now()};}
+  if(wasWished){
+    delete wish[sid];
+  }else{
+    wish[sid]={
+      id:sid,
+      title:title||'',
+      poster_path:poster||'',
+      release_date:date||'',
+      vote_average:parseFloat(rating)||0,
+      addedAt:Date.now()
+    };
+  }
   renderMovies();
   if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
   showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');

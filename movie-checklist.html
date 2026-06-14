@@ -432,11 +432,12 @@ body{color:var(--text);font-family:'Inter',sans-serif;font-size:15px;display:fle
       <div class="search-topbar">
         <div class="search-wrap">
           <div class="search-type-toggle">
-            <button class="stt-btn active" id="stt-person" onclick="setSType('person',this)">👤 Director / Actor</button>
-            <button class="stt-btn" id="stt-movie" onclick="setSType('movie',this)">🎬 Película</button>
+            <button class="stt-btn active" id="stt-director" onclick="setSType('director',this)">🎬 Director</button>
+            <button class="stt-btn" id="stt-actor" onclick="setSType('actor',this)">🎭 Actor</button>
+            <button class="stt-btn" id="stt-movie" onclick="setSType('movie',this)">🍿 Película</button>
           </div>
           <div class="search-row">
-            <input class="search-inp" id="si" type="text" placeholder="Buscá un director o actor..." autocomplete="off"/>
+            <input class="search-inp" id="si" type="text" placeholder="Buscá un director..." autocomplete="off"/>
             <button class="btn-srch" onclick="doSearch()">Buscar</button>
           </div>
           <div id="sug-box" style="display:none;"></div>
@@ -639,7 +640,11 @@ window.setSType=(t,btn)=>{
   document.querySelectorAll('.stt-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   const si=document.getElementById('si');
-  if(si)si.placeholder=t==='movie'?'Buscá una película...':'Buscá un director o actor...';
+  if(si){
+    if(t==='director')si.placeholder='Buscá un director...';
+    else if(t==='actor')si.placeholder='Buscá un actor o actriz...';
+    else si.placeholder='Buscá una película...';
+  }
   hideSug();
 };
 function hideSug(){const s=document.getElementById('sug-box');if(s){s.style.display='none';s.innerHTML='';}}
@@ -680,7 +685,15 @@ window.doSearch=async()=>{
       }).join('');
     }else{
       const d=await tmdb('/search/person?query='+encodeURIComponent(q)+'&include_adult=false');
-      const res=(d.results||[]).slice(0,7);
+      let res=(d.results||[]).slice(0,20);
+      // Filter by department based on search type
+      if(sType==='director'){
+        res=res.filter(p=>p.known_for_department==='Directing').slice(0,7);
+      }else if(sType==='actor'){
+        res=res.filter(p=>p.known_for_department==='Acting').slice(0,7);
+      }else{
+        res=res.slice(0,7);
+      }
       if(!res.length){sb.innerHTML='<div class="loading-m" style="padding:8px 14px;font-size:12px;">Sin resultados</div>';return;}
       sb.innerHTML=res.map(p=>{
         const dept=p.known_for_department==='Directing'?'Director/a':p.known_for_department==='Acting'?'Actor/Actriz':(p.known_for_department||'');
@@ -901,7 +914,18 @@ async function loadUD(personId){
 async function saveUD(){
   if(!cu||!pid||!currentPersonIsFollowed)return;
   try{
-    await setDoc(doc(db,'users',cu.uid,'lists',pid),cleanForFirestore({seen,notes,wish}),{merge:true});
+    // Normalize all keys to strings before saving
+    const normSeen={};Object.keys(seen).forEach(k=>{normSeen[sid(k)]=true;});
+    const normNotes={};Object.keys(notes).forEach(k=>{if(notes[k])normNotes[sid(k)]=notes[k];});
+    const normWish={};Object.keys(wish).forEach(k=>{
+      if(wish[k]&&typeof wish[k]==='object'){
+        normWish[sid(k)]={...wish[k],id:sid(k)}; // ensure id is string inside object too
+      }
+    });
+    await setDoc(doc(db,'users',cu.uid,'lists',pid),
+      cleanForFirestore({seen:normSeen,notes:normNotes,wish:normWish}),
+      {merge:true}
+    );
   }catch(e){showErr('Error al guardar: '+e.message);}
 }
 async function saveMeta(id,name,photo,dept,total){
@@ -976,7 +1000,6 @@ function renderMovies(){
   }).join('');
 }
 
-// Card actions — read data from attributes, no inline param escaping needed
 window.actSeen=async(card)=>{
   const id=sid(card.dataset.id);
   if(seen[id]){delete seen[id];}else{seen[id]=true;delete wish[id];}
@@ -991,7 +1014,7 @@ window.actWish=async(card)=>{
     delete wish[id];
   }else{
     wish[id]={
-      id,
+      id,                                    // always string
       title:card.dataset.title||'',
       poster_path:card.dataset.poster||'',
       release_date:card.dataset.date||'',
@@ -1001,7 +1024,17 @@ window.actWish=async(card)=>{
   }
   renderMovies();
   if(currentPersonIsFollowed){
+    // Followed: save to this person's Firestore document
     await saveUD();
+    await loadWishlist();
+  }else{
+    // Not followed: save to standalone so wishlist works anyway
+    if(wasWished){
+      delete standaloneData.wish[id];
+    }else{
+      standaloneData.wish[id]={...wish[id],_listName:'Sin seguir',_listId:'standalone'};
+    }
+    await saveStandalone();
     await loadWishlist();
   }
   showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
@@ -1086,15 +1119,21 @@ window.removeWish=async(card)=>{
       delete standaloneData.wish[id];
       await saveStandalone();
     }else{
+      // Read the full wish map, delete the key, write back the whole thing
+      // This is the only reliable way to remove a nested map key in Firestore
       const ref=doc(db,'users',cu.uid,'lists',listId);
-      const s=await getDoc(ref);
-      if(s.exists()){
-        const d=s.data();
-        const w=cleanForFirestore({...d.wish||{}});
-        delete w[id];
-        await setDoc(ref,{wish:w},{merge:true});
+      const snap=await getDoc(ref);
+      if(snap.exists()){
+        const currentWish=snap.data().wish||{};
+        // Build new wish object without this id (check both string and number key)
+        const newWish={};
+        Object.keys(currentWish).forEach(k=>{
+          if(sid(k)!==id)newWish[sid(k)]=currentWish[k];
+        });
+        // Write back entire wish map (not merge — full replace of the wish field)
+        await setDoc(ref,{wish:cleanForFirestore(newWish)},{merge:true});
       }
-      // If we're currently viewing this person's filmography, update local state too
+      // Also update local wish if viewing this person
       if(pid===listId){
         delete wish[id];
         renderMovies();

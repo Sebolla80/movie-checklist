@@ -1005,51 +1005,77 @@ function renderMovies(){
     const dateStr=isTV?(m._date||''):(m.release_date||'');
     const yr=dateStr?dateStr.substring(0,4):'—';
     const rt=m.vote_average?'★ '+m.vote_average.toFixed(1):'';
-    const sv=!!seen[String(m.id)];const wished=!!wish[String(m.id)];const nt=notes[String(m.id)]||'';
+    const sid=String(m.id);
+    const sv=!!seen[sid];const wished=!!wish[sid];const nt=notes[sid]||'';
     const pl=prov[m.id]||[];
     const ph=pl.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
-    const escT=esc(title);const escP=esc(poster);const escD=esc(dateStr);const escO=esc(orig);
-    return`<div class="mc ${sv?'seen':wished?'wished':''}">
-      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreview(${m.id},'${escT}','${escP}','${escO}','${yr}','${rt}','${escD}',${isTV})">
-        ${poster?`<img class="mp" src="https://image.tmdb.org/t/p/w92${poster}" loading="lazy" alt="${escT}"/>`:`<div class="mp-ph">${isTV?'📺':'🎬'}</div>`}
+    return`<div class="mc ${sv?'seen':wished?'wished':''}" data-id="${sid}" data-title="${esc(title)}" data-poster="${esc(poster)}" data-date="${esc(dateStr)}" data-rating="${m.vote_average||0}" data-istv="${isTV}" data-orig="${esc(orig)}">
+      <div style="display:flex;align-items:flex-start;gap:12px;flex:1;cursor:pointer;" onclick="openPreviewFromCard(this.closest('.mc'))">
+        ${poster?`<img class="mp" src="https://image.tmdb.org/t/p/w92${poster}" loading="lazy" alt="${esc(title)}"/>`:`<div class="mp-ph">${isTV?'📺':'🎬'}</div>`}
         <div class="mb">
-          <div class="mt">${escT}</div>
-          ${showOrig?`<div class="mt-orig">${escO}</div>`:''}
+          <div class="mt">${esc(title)}</div>
+          ${showOrig?`<div class="mt-orig">${esc(orig)}</div>`:''}
           <div class="mm"><span class="my">${yr}</span>${rt?`<span class="mr">${rt}</span>`:''}</div>
           ${ph?`<div class="plats">${ph}</div>`:''}
           ${nt?`<div class="mn-prev">${esc(nt)}</div>`:''}
         </div>
       </div>
       <div class="macts">
-        <button class="act-btn check ${sv?'on':''}" onclick="tSeen(${m.id})" title="${sv?'Desmarcar':'Marcar como visto'}">✓</button>
-        <button class="act-btn star ${wished?'on':''}" onclick="tWish(${m.id},'${escT}','${escP}','${escD}',${m.vote_average||0})" title="${wished?'Quitar de wishlist':'Agregar a wishlist'}">★</button>
-        <button class="act-btn pen ${nt?'on':''}" onclick="oModal(${m.id},'${escT}')" title="Nota">✏</button>
+        <button class="act-btn check ${sv?'on':''}" onclick="tSeenFromCard(this.closest('.mc'))" title="${sv?'Desmarcar':'Marcar como visto'}">✓</button>
+        <button class="act-btn star ${wished?'on':''}" onclick="tWishFromCard(this.closest('.mc'))" title="${wished?'Quitar de wishlist':'Agregar a wishlist'}">★</button>
+        <button class="act-btn pen ${nt?'on':''}" onclick="tNoteFromCard(this.closest('.mc'))" title="Nota">✏</button>
       </div>
     </div>`;
   }).join('');
 }
 
-window.tSeen=async id=>{
-  const sid=String(id);
+// Helper functions that read from data attributes — avoids quote escaping bugs
+window.tSeenFromCard=async(card)=>{
+  const sid=card.dataset.id;
   if(seen[sid]){delete seen[sid];}else{seen[sid]=true;if(wish[sid])delete wish[sid];}
   renderMovies();if(currentPersonIsFollowed)await saveUD();
   showToast(seen[sid]?'Marcado como visto ✓':'Desmarcado');
 };
-window.tWish=async(id,title,poster,date,rating)=>{
-  const sid=String(id);
+window.tWishFromCard=async(card)=>{
+  const sid=card.dataset.id;
   const wasWished=!!wish[sid];
   if(wasWished){
     delete wish[sid];
   }else{
     wish[sid]={
       id:sid,
-      title:title||'',
-      poster_path:poster||'',
-      release_date:date||'',
-      vote_average:parseFloat(rating)||0,
+      title:card.dataset.title||'',
+      poster_path:card.dataset.poster||'',
+      release_date:card.dataset.date||'',
+      vote_average:parseFloat(card.dataset.rating)||0,
       addedAt:Date.now()
     };
   }
+  renderMovies();
+  if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
+  showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
+};
+window.tNoteFromCard=(card)=>{
+  oModal(card.dataset.id, card.dataset.title);
+};
+window.openPreviewFromCard=(card)=>{
+  const{id,title,poster,date,rating,istv,orig}=card.dataset;
+  const yr=date?date.substring(0,4):'—';
+  const rt=rating&&rating!=='0'?'★ '+parseFloat(rating).toFixed(1):'';
+  openPreview(id,title,poster,orig||'',yr,rt,date,istv==='true');
+};
+
+window.tSeen=async id=>{ // kept for backward compat
+  const sid=String(id);
+  if(seen[sid]){delete seen[sid];}else{seen[sid]=true;if(wish[sid])delete wish[sid];}
+  renderMovies();if(currentPersonIsFollowed)await saveUD();
+  showToast(seen[sid]?'Marcado como visto ✓':'Desmarcado');
+};
+window.tWish=async(id,title,poster,date,rating)=>{ // kept for backward compat
+  const sid=String(id);
+  const wasWished=!!wish[sid];
+  if(wasWished){delete wish[sid];}
+  else{wish[sid]={id:sid,title:title||'',poster_path:poster||'',release_date:date||'',vote_average:parseFloat(rating)||0,addedAt:Date.now()};}
   renderMovies();
   if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
   showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');

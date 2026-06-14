@@ -824,8 +824,13 @@ window.closePerson=closePerson;
 async function loadUD(id){
   if(!cu)return;
   try{const s=await getDoc(doc(db,'users',cu.uid,'lists',String(id)));
-    if(s.exists()){const d=s.data();seen=d.seen||{};notes=d.notes||{};wish=d.wish||{};}
-    else{seen={};notes={};wish={};}
+    if(s.exists()){
+      const d=s.data();
+      // Normalize all keys to strings to avoid numeric vs string mismatch
+      seen={};Object.keys(d.seen||{}).forEach(k=>{seen[String(k)]=d.seen[k];});
+      notes={};Object.keys(d.notes||{}).forEach(k=>{notes[String(k)]=d.notes[k];});
+      wish={};Object.keys(d.wish||{}).forEach(k=>{wish[String(k)]=d.wish[k];});
+    }else{seen={};notes={};wish={};}
   }catch(e){seen={};notes={};wish={};}
 }
 async function saveUD(){
@@ -884,28 +889,30 @@ function renderWish(q=''){
 window.filterWish=q=>renderWish(q);
 window.removeWish=async(listId,movieId)=>{
   if(!cu)return;
+  const mid=String(movieId); // keys in Firestore objects are always strings
   try{
     if(listId==='standalone'){
+      delete standaloneData.wish[mid];
       delete standaloneData.wish[movieId];
       await saveStandalone();
     }else{
-      // Update Firestore
       const ref=doc(db,'users',cu.uid,'lists',String(listId));
       const s=await getDoc(ref);
       if(s.exists()){
         const d=s.data();
-        const w=d.wish||{};
-        delete w[movieId];
+        const w={...d.wish||{}};
+        delete w[mid];
+        delete w[movieId]; // belt and suspenders
         await setDoc(ref,{wish:w},{merge:true});
       }
-      // Also update local wish object if we're viewing this person's list
       if(pid===String(listId)){
+        delete wish[mid];
         delete wish[movieId];
         renderMovies();
       }
     }
     await loadWishlist();
-    renderWish(document.getElementById('wish-fi').value);
+    renderWish(document.getElementById('wish-fi')?.value||'');
     showToast('Quitado de wishlist');
   }catch(e){showErr('Error al actualizar wishlist.');}
 };
@@ -977,7 +984,7 @@ function renderMovies(){
     const dateStr=isTV?(m._date||''):(m.release_date||'');
     const yr=dateStr?dateStr.substring(0,4):'—';
     const rt=m.vote_average?'★ '+m.vote_average.toFixed(1):'';
-    const sv=!!seen[m.id];const wished=!!wish[m.id];const nt=notes[m.id]||'';
+    const sv=!!seen[String(m.id)];const wished=!!wish[String(m.id)];const nt=notes[String(m.id)]||'';
     const pl=prov[m.id]||[];
     const ph=pl.map(p=>`<span class="ptag ${pc(p.provider_name)}">${p.provider_name}</span>`).join('');
     const escT=esc(title);const escP=esc(poster);const escD=esc(dateStr);const escO=esc(orig);
@@ -1002,13 +1009,15 @@ function renderMovies(){
 }
 
 window.tSeen=async id=>{
-  if(seen[id]){delete seen[id];}else{seen[id]=true;if(wish[id])delete wish[id];}
+  const sid=String(id);
+  if(seen[sid]){delete seen[sid];}else{seen[sid]=true;if(wish[sid])delete wish[sid];}
   renderMovies();if(currentPersonIsFollowed)await saveUD();
-  showToast(seen[id]?'Marcado como visto ✓':'Desmarcado');
+  showToast(seen[sid]?'Marcado como visto ✓':'Desmarcado');
 };
 window.tWish=async(id,title,poster,date,rating)=>{
-  const wasWished=!!wish[id];
-  if(wasWished){delete wish[id];}else{wish[id]={id,title,poster_path:poster,release_date:date,vote_average:rating,addedAt:Date.now()};}
+  const sid=String(id);
+  const wasWished=!!wish[sid];
+  if(wasWished){delete wish[sid];}else{wish[sid]={id:sid,title,poster_path:poster,release_date:date,vote_average:rating,addedAt:Date.now()};}
   renderMovies();
   if(currentPersonIsFollowed){await saveUD();await loadWishlist();}
   showToast(!wasWished?'Agregado a wishlist ★':'Quitado de wishlist');
